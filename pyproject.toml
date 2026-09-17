@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "volightcurve"
+version = "0.1.0"
+description = "IVOA-oriented lightcurve I/O and photometric calibration"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "LicenseRef-Proprietary" }
+authors = [{ name = "UPJS / SKVO" }]
+dependencies = [
+    "numpy",
+    "astropy",
+    # GAVO VOTable stack (same sources as skvo_veb_2 requirements):
+    "gavoutils @ https://soft.g-vo.org/dist/gavoutils-latest.tar.gz",
+    "gavostc @ https://soft.g-vo.org/dist/gavostc-latest.tar.gz",
+    "gavovot @ https://soft.g-vo.org/dist/gavovot-latest.tar.gz",
+]
+
+[project.optional-dependencies]
+dev = ["pytest", "matplotlib"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "tests"]
