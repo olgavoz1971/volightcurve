@@ -257,6 +257,10 @@ def calibration_dict_from_volc(volc) -> dict[str, Any]:
     if filter_id and str(filter_id) not in ("", "Unknown"):
         calibration[KEY_FILTER] = str(filter_id)
 
+    filter_name = getattr(photdm, "filter_name", None)
+    if filter_name:
+        calibration[KEY_FILTER_NAME] = str(filter_name)
+
     phot_filter = getattr(photdm, "filter", None)
     if phot_filter is not None and getattr(phot_filter, "spectral_location", None) is not None:
         spectral = phot_filter.spectral_location
@@ -267,7 +271,7 @@ def calibration_dict_from_volc(volc) -> dict[str, Any]:
         except Exception:
             logger.debug("Could not serialise spectral_location for write", exc_info=True)
 
-    if table_meta.get("filter_name"):
+    if KEY_FILTER_NAME not in calibration and table_meta.get("filter_name"):
         calibration[KEY_FILTER_NAME] = str(table_meta["filter_name"])
 
     photcal = getattr(photdm, "photcal", None)

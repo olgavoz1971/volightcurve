@@ -30,17 +30,29 @@ venv with ``pip install -e``.
 
 ## PhotDM / ``PhotCal`` conversion API
 
-Calibration follows the nested PhotDM shape (see IVOA
-[photcal.py](https://github.com/ivoa/modelinstanceinvot-code/blob/merge-syntax/python/client/photdm/photcal.py)):
+Photometric calibration is shaped after the IVOA Recommendation
+*[Photometry Data Model (PhotDM) 1.1](https://www.ivoa.net/documents/PHOTDM/20221101/PhotDMv1-1.html)*
+(Salgado et al.). We try to stay **close** to that model — nested
+``PhotCal`` → ``MagnitudeSystem`` + ``ZeroPoint`` (Pogson / Asinh /
+Linear) — without claiming a full PhotDM implementation (filters,
+transmission curves, and several PhotDM types remain simplified or
+absent). A handy structural sketch is the IVOA sample client
+[photcal.py](https://github.com/ivoa/modelinstanceinvot-code/blob/merge-syntax/python/client/photdm/photcal.py).
+
+Note: our class named ``PhotDM`` is a **per-column hub** on
+``VOLightCurve`` (filter + photcal). PhotDM 1.1 has no object type of
+that name; its binding class for calibration is ``PhotCal``.
 
 ```text
-PhotCal  (façade — call these methods from application code)
-  ├── magnitudeSystem
-  ├── photometryFilter (optional)
-  └── zeroPoint
-        ├── PogsonZeroPoint      ← live mag↔flux + error helpers
-        ├── AsinhZeroPoint       ← stub (softeningParameter reserved)
-        └── LinearFluxZeroPoint  ← stub
+VOLightCurve.photdms[column]
+  └── PhotDM                 ← hub per photometry column
+        ├── photometryFilter
+        └── photcal (PhotCal)  ← façade — call mag_to_flux / … here
+              ├── magnitudeSystem
+              └── zeroPoint
+                    ├── PogsonZeroPoint      ← live mag↔flux + error helpers
+                    ├── AsinhZeroPoint       ← stub (softeningParameter reserved)
+                    └── LinearFluxZeroPoint  ← stub
 ```
 
 ```python

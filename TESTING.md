@@ -13,6 +13,7 @@ import **only** ``volightcurve`` (and Astropy / NumPy / GAVO).
 | ``test_write_vo.py`` | Low-level VOTable writer |
 | ``test_photdm_ingest.py`` | PhotDM GROUP ingest |
 | ``test_photcal_conversion.py`` | ``PhotCal`` / PogsonZeroPoint mag↔flux |
+| ``test_photometry_filter_name.py`` | Photcal GROUP ``identifier`` + ``name`` |
 | ``test_time_reference.py`` | TIMESYS helpers and VOLightCurve ingest |
 | ``fixtures_votable.py`` | Shared Gaia-style VOTable bytes |
 

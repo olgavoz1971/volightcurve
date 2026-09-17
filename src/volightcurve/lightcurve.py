@@ -42,11 +42,20 @@ class PhotometryFilter:
     is used to describe a bandpass/filter in astronomical observations.
     """
 
-    def __init__(self, filter_id=None, spectral_location=None, spectral_location_unit: str = None):
+    def __init__(
+        self,
+        filter_id=None,
+        name: str | None = None,
+        spectral_location=None,
+        spectral_location_unit: str = None,
+    ):
         """Initialises a PhotometryFilter instance.
 
         Args:
-            filter_id (str, optional): The unique identifier for the filter. Defaults to None.
+            filter_id (str, optional): Unique passport
+                (``photDM:PhotometryFilter.identifier``), e.g. ``Generic/Bessell.I``.
+            name (str, optional): Human-readable label
+                (``photDM:PhotometryFilter.name``), e.g. ``I`` for plot axes.
             spectral_location (float or astropy.units.Quantity, optional): The physical
                 spectral location (e.g., central wavelength) of the filter. Defaults to None.
             spectral_location_unit (str, optional): The physical unit of the spectral
@@ -54,6 +63,7 @@ class PhotometryFilter:
                 an astropy.units.Quantity. Defaults to None.
         """
         self._filter_id = filter_id  # photDM:PhotometryFilter.identifier
+        self._name = name  # photDM:PhotometryFilter.name
 
         # Build the physical quantity
         if spectral_location is None:
@@ -75,7 +85,7 @@ class PhotometryFilter:
 
     @property
     def filter_id(self):
-        """Gets or sets the filter identifier.
+        """Gets or sets the filter identifier (PhotDM passport).
 
         Returns:
             str: The filter identifier.
@@ -88,9 +98,30 @@ class PhotometryFilter:
             raise ValueError("Filter ID must be a string.")
         self._filter_id = value.strip()
 
+    @property
+    def name(self):
+        """Gets or sets the human-readable filter name (PhotDM ``name``).
+
+        Returns:
+            str or None: Display label for plots and UI.
+        """
+        return self._name
+
+    @name.setter
+    def name(self, value):
+        if value is None:
+            self._name = None
+            return
+        if not isinstance(value, str):
+            raise ValueError("Filter name must be a string.")
+        stripped = value.strip()
+        self._name = stripped or None
+
     def __repr__(self):
-        return (f"<PhotometryFilter: filter_id={self.filter_id} "
-                f"spectralLocation={self.spectral_location}>")
+        return (
+            f"<PhotometryFilter: filter_id={self.filter_id} name={self.name} "
+            f"spectralLocation={self.spectral_location}>"
+        )
 
 
 class PhotCal:
@@ -324,6 +355,22 @@ class PhotDM:
         self.filter.filter_id = value
 
     @property
+    def filter_name(self):
+        """Gets or sets the human-readable filter name on the nested filter.
+
+        Returns:
+            str or None: ``PhotometryFilter.name``, or None if no filter is set.
+        """
+        return self.filter.name if self.filter else None
+
+    @filter_name.setter
+    def filter_name(self, value):
+        if self.filter is None:
+            self.filter = PhotometryFilter(name=value)
+        else:
+            self.filter.name = value
+
+    @property
     def mag0(self):
         """Gets or sets the zero-point magnitude shortcut.
 
@@ -500,6 +547,7 @@ def extract_photdm(tree):
     UT_MAG = "photDM:PhotCal.zeroPoint.referenceMagnitude.value"
     UT_MAG_SYS = "photDM:PhotCal.magnitudeSystem.type"
     UT_FILTER = "photDM:PhotometryFilter.identifier"
+    UT_FILTER_NAME = "photDM:PhotometryFilter.name"
     UT_FILTER_SPEC = "photDM:PhotometryFilter.spectralLocation.value"
 
     def process_group(node, text, attrs, childIter):
@@ -512,6 +560,7 @@ def extract_photdm(tree):
             }
             filter_params = {
                 "filter_id": "",
+                "name": None,
                 "spectral_location": 0.0,
                 "spectral_location_unit": None,
             }
@@ -543,6 +592,15 @@ def extract_photdm(tree):
                         cal_params["mag_sys"] = target_param.value
                     elif ut == UT_FILTER.lower():
                         filter_params["filter_id"] = target_param.value
+                    elif ut == UT_FILTER_NAME.lower():
+                        filter_params["name"] = target_param.value
+                    elif (
+                        not ut
+                        and (getattr(target_param, "name", None) or "").lower()
+                        in ("filter", "filtername")
+                    ):
+                        if not filter_params.get("name"):
+                            filter_params["name"] = target_param.value
                     elif ut == UT_FILTER_SPEC.lower():
                         filter_params["spectral_location"] = float(target_param.value)
                         filter_params["spectral_location_unit"] = getattr(
@@ -550,7 +608,7 @@ def extract_photdm(tree):
                         )
 
             phot_filter = PhotometryFilter(**filter_params)
-            photcal = PhotCal(**cal_params)
+            photcal = PhotCal(**cal_params, photometry_filter=phot_filter)
             photdm = PhotDM(photcal=photcal, photometry_filter=phot_filter)
             if group_id:
                 photcal_groups[str(group_id)] = photdm
@@ -1206,8 +1264,12 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
 
     for colname in volc.get_flux_colnames() + volc.get_mag_colnames():
         photdm = volc.photdms.get(colname, None)
+        heur_filter_name = None
+        if KEY_FILTER_NAME in calibration:
+            heur_filter_name = str(calibration[KEY_FILTER_NAME])
         new_filter = PhotometryFilter(
             filter_id=heur_filter_id,
+            name=heur_filter_name,
             spectral_location=spectral_location,
             spectral_location_unit=spectral_unit,
         )
@@ -1219,6 +1281,7 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
                 zp_mag=zp_mag,
                 zp_mag_unit=zp_mag_unit,
                 mag_sys=mag_sys,
+                photometry_filter=new_filter,
             )
 
         if photdm is None:
@@ -1228,6 +1291,8 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
                 photdm.filter_id is None or photdm.filter_id == "Unknown"
             ):
                 photdm.filter_id = heur_filter_id
+            if heur_filter_name and not photdm.filter_name:
+                photdm.filter_name = heur_filter_name
             if build_photcal:
                 if photdm.photcal is None:
                     photdm.photcal = photcal
@@ -1757,7 +1822,9 @@ def write_vo_lightcurve(
         table_description (str, optional): Table block description. Defaults to None.
         ra (float, optional): RA of target in degrees. Defaults to None.
         dec (float, optional): Dec of target in degrees. Defaults to None.
-        filter_name (str, optional): Generic filter/band name to write as a Table Param. Defaults to None.
+        filter_name (str, optional): Human-readable filter name written as
+            ``photDM:PhotometryFilter.name`` in the photcal GROUP (and a legacy
+            table PARAM ``filter``). Defaults to None.
         period (float, optional): Variability period in days. Defaults to None.
         epoch (float, optional): Reference time epoch in days. Defaults to None.
         binary (bool, optional): If True, encodes table data in BINARY format.
@@ -1937,6 +2004,20 @@ def write_vo_lightcurve(
     p_mgs.utype = 'photDM:PhotCal.magnitudeSystem.type'
     p_mgs.ucd = 'meta.code'
     g.entries.append(p_mgs)
+
+    # filterName — PhotometryFilter.name inside photcal GROUP
+    if filter_name is not None:
+        p_fn = Param(
+            vot_file,
+            name='filterName',
+            value=str(filter_name),
+            datatype='char',
+            arraysize='*',
+        )
+        p_fn.utype = 'photDM:PhotometryFilter.name'
+        p_fn.ucd = 'meta.id;instr.filter'
+        p_fn.description = 'Human-readable photometric filter name'
+        g.entries.append(p_fn)
 
     # effectiveWavelength (Optional PARAM)
     if effective_wavelength is not None:

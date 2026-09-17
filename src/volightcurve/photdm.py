@@ -21,7 +21,7 @@ logger = logging.getLogger(__name__)
 
 
 class MagnitudeSystem:
-    """photDM:MagnitudeSystem — catalogue magnitude system label.
+    """photDM:MagnitudeSystem -- catalogue magnitude system label.
 
     Args:
         type: System name (e.g. ``Vega``, ``AB``).
@@ -40,7 +40,7 @@ class MagnitudeSystem:
 
 
 class ZeroPoint:
-    """Base photDM:ZeroPoint — holds ZP flux/magnitude; subclasses own the scale maths.
+    """Base photDM:ZeroPoint -- holds ZP flux/magnitude; subclasses own the scale maths.
 
     Args:
         zp_flux: Zero-point flux value or Quantity.
@@ -166,7 +166,7 @@ class ZeroPoint:
 
 
 class PogsonZeroPoint(ZeroPoint):
-    """photDM:PogsonZeroPoint — classic Pogson magnitude↔flux relation."""
+    """photDM:PogsonZeroPoint -- classic Pogson magnitude↔flux relation."""
 
     dmtype = "photdm:PogsonZeroPoint"
 
@@ -256,7 +256,7 @@ class PogsonZeroPoint(ZeroPoint):
 
 
 class AsinhZeroPoint(ZeroPoint):
-    """photDM:AsinhZeroPoint stub — softening parameter reserved for luptitudes.
+    """photDM:AsinhZeroPoint stub -- softening parameter reserved for luptitudes.
 
     Conversion methods are not implemented yet (Phase 5 stub only).
 
@@ -287,7 +287,7 @@ class AsinhZeroPoint(ZeroPoint):
 
 
 class LinearFluxZeroPoint(ZeroPoint):
-    """photDM:LinearFluxZeroPoint stub — conversion not implemented yet."""
+    """photDM:LinearFluxZeroPoint stub -- conversion not implemented yet."""
 
     dmtype = "photdm:LinearFluxZeroPoint"
 
