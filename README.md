@@ -78,7 +78,7 @@ flux columns may differ).
 From a virtualenv that already has (or will install) the declared dependencies:
 
 ```bash
-pip install -e /home/voz/projects/UPJS/volightcurve
+pip install -e /path/to/volightcurve
 ```
 
 ```python
@@ -90,6 +90,30 @@ from volightcurve import (
     PhotCal,
 )
 ```
+
+## Cursor Agent skill
+
+``pip install`` does **not** install Cursor skills. The Agent skill lives at
+``.cursor/skills/volightcurve/`` in this checkout (self-contained:
+``SKILL.md`` plus ``references/``).
+
+To use it in a **fresh host project** (or globally on this machine), copy or
+symlink the whole skill directory:
+
+```bash
+# into a consumer project
+mkdir -p /path/to/host-app/.cursor/skills
+cp -a /path/to/volightcurve/.cursor/skills/volightcurve \
+  /path/to/host-app/.cursor/skills/
+
+# or for all local Cursor projects
+mkdir -p ~/.cursor/skills
+cp -a /path/to/volightcurve/.cursor/skills/volightcurve ~/.cursor/skills/
+```
+
+After editing ``docs/io_contract.md`` or ``examples/basic_workflow.py``,
+re-copy those files into ``.cursor/skills/volightcurve/references/`` so the
+bundled skill stays in sync.
 
 ## Quick start
 
@@ -158,6 +182,7 @@ volightcurve/
   TESTING.md
   docs/io_contract.md
   examples/basic_workflow.py
+  .cursor/skills/volightcurve/   # Cursor Agent skill (+ references/)
   src/volightcurve/
     __init__.py
     lightcurve.py

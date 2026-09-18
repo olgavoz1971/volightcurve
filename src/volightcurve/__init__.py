@@ -5,6 +5,13 @@ standard VOTable files as well as heuristic ASCII text formats. It maps columns 
 astronomical concepts like coordinate systems, time systems, and photometric calibrations.
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
+try:
+    __version__ = version("volightcurve")
+except PackageNotFoundError:  # pragma: no cover - editable / source tree without metadata
+    __version__ = "0.0.0+unknown"
+
 from .io import (
     assemble_volightcurve,
     normalise_io_format,
@@ -50,6 +57,7 @@ from .vo_unit_codec import (
 )
 
 __all__ = [
+    "__version__",
     "VOLightCurve",
     "PhotCal",
     "PhotDM",
