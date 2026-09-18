@@ -111,9 +111,9 @@ mkdir -p ~/.cursor/skills
 cp -a /path/to/volightcurve/.cursor/skills/volightcurve ~/.cursor/skills/
 ```
 
-After editing ``docs/io_contract.md`` or ``examples/basic_workflow.py``,
-re-copy those files into ``.cursor/skills/volightcurve/references/`` so the
-bundled skill stays in sync.
+After editing ``docs/io_contract.md``, ``examples/basic_workflow.py``, or
+skill-only notes such as column discovery, re-copy or refresh files under
+``.cursor/skills/volightcurve/references/`` so the bundled skill stays in sync.
 
 ## Quick start
 
@@ -136,6 +136,52 @@ python examples/basic_workflow.py
 | ``PogsonZeroPoint`` | Nested zero-point implementing Pogson scale |
 | ``AsinhZeroPoint`` / ``LinearFluxZeroPoint`` | Stubs for later scales |
 | ``write_vo_lightcurve`` | Low-level VOTable writer (prefer ``write_lightcurve``) |
+| ``find_columns_by_ucd`` | Low-level UCD fragment search on a table |
+| ``get_time_colnames`` / ``get_mag_colnames`` / ``get_flux_colnames`` | Primary columns (errors excluded) |
+| ``get_error_colnames`` | ``stat.error`` columns; optional ``base_ucd`` filter |
+
+``VOLightCurve`` also exposes ``get_time_colnames``, ``get_mag_colnames``,
+``get_flux_colnames``, ``get_mag_error_colnames``, and
+``get_flux_error_colnames`` as instance methods.
+
+## Column discovery (do not guess names)
+
+Column **names** are not the contract. On VOTable products, roles come from
+**UCDs** (and units). A photometry column may be called ``phot``, ``mag``, or
+something else; its error may be ``flux_error`` even when the values are
+magnitudes, or ``mag_err`` when they are not. After ``read_lightcurve``,
+discover columns with the helpers above — do **not** hard-code
+``table["mag"]`` / ``table["flux_error"]`` unless the file format guarantees
+those names (non-VO ASCII uses the keyword / column-name conventions in
+[docs/io_contract.md](docs/io_contract.md)).
+
+```python
+from volightcurve import read_lightcurve
+
+volc = read_lightcurve("gaia_veb.vot", filename="gaia_veb.vot")
+
+time_cols = volc.get_time_colnames()          # e.g. ["obs_time"]
+mag_cols = volc.get_mag_colnames()            # primary phot.mag (no errors)
+flux_cols = volc.get_flux_colnames()          # primary phot.flux (no errors)
+mag_err_cols = volc.get_mag_error_colnames()  # stat.error + phot.mag
+flux_err_cols = volc.get_flux_error_colnames()  # stat.error + phot.flux
+
+# Same idea on a bare Astropy table:
+# from volightcurve import get_flux_colnames, get_error_colnames
+# get_error_colnames(table, base_ucd="phot.flux")
+```
+
+**Example:** in a Gaia VO lightcurve, ``phot`` may carry **flux**
+(``ucd="phot.flux;…"``) and ``flux_error`` its uncertainty
+(``ucd="stat.error;phot.flux;…"``). Discovery returns ``phot`` from
+``get_flux_colnames()`` and ``flux_error`` from ``get_flux_error_colnames()``.
+
+**Limitation (known gap):** IVOA annotation does not yet give a robust
+standard way to bind one error FIELD to one photometry FIELD when several
+bands share a table. We therefore return **lists** filtered by domain UCD,
+not a guaranteed 1:1 ``pair_error_for(phot_col)``. For typical single-band
+products that is enough; if several error columns match, fail visibly or ask
+the user rather than inventing a pairing.
 
 ## Non-VOTable formats (``.dat``, CSV, ECSV)
 

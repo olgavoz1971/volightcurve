@@ -3,11 +3,12 @@ name: volightcurve
 description: >-
   Use the volightcurve Python package for astronomical lightcurve I/O and
   magnitude↔flux conversion (VOTable, ECSV, CSV, .dat; PhotCal / PhotDM;
-  TIMESYS). Use when the user has lightcurve files, asks for flux- or
-  magnitude-domain maths, photometry calibration, zero points, Pogson or
-  luptitude conversion, VO lightcurves, or assembling/exporting calibrated
-  time series — not when inventing custom Astropy table readers or inline
-  mag–flux formulae.
+  TIMESYS; UCD column discovery for time/mag/flux/errors). Use when the user
+  has lightcurve files, asks which column is magnitude or flux error, asks for
+  flux- or magnitude-domain maths, photometry calibration, zero points, Pogson
+  or luptitude conversion, VO lightcurves, or assembling/exporting calibrated
+  time series — not when inventing custom Astropy table readers, guessing
+  column names, or inline mag–flux formulae.
 ---
 
 # volightcurve
@@ -59,8 +60,11 @@ This skill folder is self-contained: extra detail lives under
    first; do not fall back to a from-scratch parser.
 
 3. When unsure about formats or keywords, read
-   [references/io_contract.md](references/io_contract.md). For a mag↔flux↔mag
-   round-trip, follow [references/basic_workflow.py](references/basic_workflow.py).
+   [references/io_contract.md](references/io_contract.md). For finding
+   time / mag / flux / error columns, read
+   [references/column_discovery.md](references/column_discovery.md). For a
+   mag↔flux↔mag round-trip, follow
+   [references/basic_workflow.py](references/basic_workflow.py).
 
 4. If a full package checkout is available, human docs also live at that tree’s
    `README.md` and `docs/io_contract.md`. If only a wheel is installed, rely on
@@ -80,6 +84,10 @@ This skill folder is self-contained: extra detail lives under
 - Prefer **VOTable** when rich PhotDM / TIMESYS matter. Non-VOTable formats are
   a practical compromise, not a proposed standard.
 - Incomplete photcal → **fail visibly**; do not invent ZP pairs.
+- **Discover columns** with `VOLightCurve.get_*_colnames` /
+  `get_error_colnames` (UCD-based). Do not assume names like `mag`, `phot`, or
+  `flux_error` mean a fixed domain — see
+  [references/column_discovery.md](references/column_discovery.md).
 
 ## Typical workflow (folder of files → flux domain)
 
@@ -99,11 +107,32 @@ for path in Path("data").glob("*"):  # user folder
     photdm = next(iter(volc.photdms.values()))
     if photdm.photcal is None:
         raise RuntimeError(f"{path}: no PhotCal; cannot convert to flux")
+    # Discover by UCD — do not hard-code "mag" / "flux_error"
     mag_cols = volc.get_mag_colnames()
+    flux_cols = volc.get_flux_colnames()
     if mag_cols:
         flux_col = volc.add_flux_column_from_mag(mag_cols[0])
+    elif not flux_cols:
+        raise RuntimeError(f"{path}: no mag or flux column via UCD discovery")
     write_lightcurve(volc, "votable_binary", destination=path.with_suffix(".flux.vot"))
 ```
+
+## Column discovery (mandatory habit)
+
+After ingest, locate roles with discovery helpers — full notes in
+[references/column_discovery.md](references/column_discovery.md):
+
+| Need | Call |
+|------|------|
+| Time | `volc.get_time_colnames()` |
+| Magnitudes | `volc.get_mag_colnames()` |
+| Fluxes | `volc.get_flux_colnames()` |
+| Mag errors | `volc.get_mag_error_colnames()` |
+| Flux errors | `volc.get_flux_error_colnames()` |
+
+These return **lists** filtered by UCD domain. There is no standard IVOA 1:1
+error↔value FIELD link yet; if several error columns match, fail or ask —
+do not invent pairing.
 
 ## Public API (use these)
 
@@ -115,6 +144,7 @@ for path in Path("data").glob("*"):  # user folder
 | `VOLightCurve` | In-memory table + `photdms` + TIMESYS |
 | `PhotCal` | Conversion façade → nested `ZeroPoint` (Pogson live) |
 | `PhotometryFilter` | `filter_id` (passport) + `name` (human label) |
+| `get_*_colnames` / `get_error_colnames` | UCD column discovery (see above) |
 
 PhotDM shape (simplified): `VOLightCurve.photdms[col]` → hub → `PhotCal` →
 `PogsonZeroPoint` / stubs. Filter passport:
@@ -125,8 +155,10 @@ PhotDM shape (simplified): `VOLightCurve.photdms[col]` → hub → `PhotCal` →
 
 - `astropy.table.Table.read` / raw `votable.parse` as the main ingest path when
   `read_lightcurve` applies.
+- Hard-coding `mag` / `phot` / `flux_error` without UCD discovery.
 - Local magnitude↔flux or SNR→σ_m formulae.
 - Inventing `FILTER` / ZP metadata the file does not carry.
+- Inventing error↔value column pairing when discovery returns multiple matches.
 
 ## When stuck
 
