@@ -13,6 +13,8 @@ authors = [{ name = "UPJS / SKVO" }]
 dependencies = [
     "numpy",
     "astropy",
+    # GAVO imports OpenSSL at package load (gavo.utils.monkeypatch).
+    "pyOpenSSL",
     # GAVO VOTable stack (same sources as skvo_veb_2 requirements):
     "gavoutils @ https://soft.g-vo.org/dist/gavoutils-latest.tar.gz",
     "gavostc @ https://soft.g-vo.org/dist/gavostc-latest.tar.gz",

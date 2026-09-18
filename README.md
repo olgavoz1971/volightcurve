@@ -168,7 +168,7 @@ pytest -q
 
 ## Dependencies
 
-- ``numpy``, ``astropy``
+- ``numpy``, ``astropy``, ``pyOpenSSL`` (required by GAVO at import)
 - GAVO VOTable utilities (``gavoutils`` / ``gavostc`` / ``gavovot`` tarballs)
 
 Optional for the example plots: ``matplotlib``.
