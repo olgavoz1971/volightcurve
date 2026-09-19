@@ -60,7 +60,8 @@ This skill folder is self-contained: extra detail lives under
    first; do not fall back to a from-scratch parser.
 
 3. When unsure about formats or keywords, read
-   [references/io_contract.md](references/io_contract.md). For finding
+   [references/io_contract.md](references/io_contract.md) (including ``.dat``
+   §4b header selection and free-text ``other`` columns). For finding
    time / mag / flux / error columns, read
    [references/column_discovery.md](references/column_discovery.md). For a
    mag↔flux↔mag round-trip, follow
@@ -156,6 +157,8 @@ PhotDM shape (simplified): `VOLightCurve.photdms[col]` → hub → `PhotCal` →
 - `astropy.table.Table.read` / raw `votable.parse` as the main ingest path when
   `read_lightcurve` applies.
 - Hard-coding `mag` / `phot` / `flux_error` without UCD discovery.
+- Inferring `.dat` string vs float columns from cell content; use header
+  role rules in [references/io_contract.md](references/io_contract.md) §4b.
 - Local magnitude↔flux or SNR→σ_m formulae.
 - Inventing `FILTER` / ZP metadata the file does not carry.
 - Inventing error↔value column pairing when discovery returns multiple matches.

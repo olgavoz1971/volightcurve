@@ -1124,9 +1124,9 @@ def _pickup_filter_from_table(table):
 def _recover_lc_colnames(table):
     """Strictly renames columns for unlabelled 'colN' tables based on comments or positional fallback.
 
-    Requires a comment line to have exactly the same number of whitespace-separated 
-    words as the table has columns to be considered a valid header. Otherwise, applies 
-    a rigid positional fallback: column 1 becomes 'obs_time', column 2 'mag', column 3 'mag_err'.
+    Uses the same header-selection rules as ``read_dat_table`` (``docs/io_contract.md``
+    §4b). Otherwise applies a rigid positional fallback: column 1 becomes
+    ``obs_time``, column 2 ``mag``, column 3 ``mag_err``.
 
     Args:
         table (astropy.table.Table): The table whose columns are to be renamed.
@@ -1134,6 +1134,8 @@ def _recover_lc_colnames(table):
     Returns:
         astropy.table.Table: The renamed table.
     """
+    from volightcurve.io_dat import resolve_dat_column_names, select_dat_header_names
+
     comments = table.meta.get('comments', []) or []
     num_cols = len(table.colnames)
     generic_cols = any(
@@ -1143,19 +1145,11 @@ def _recover_lc_colnames(table):
     if not generic_cols and not broken_header:
         return table
 
-    found_header = None
-
-    # Look into the comments
-    for line in comments:
-        if _is_dat_metadata_comment_line(line):
-            continue
-        # Remove #, strip, and split into words
-        parts = line.strip().lstrip('#').strip().split()
-
-        # STRICT CHECK: Word count must equal Column count
-        if len(parts) == num_cols:
-            found_header = parts
-            break
+    found_header = select_dat_header_names(comments, num_cols)
+    if found_header is not None:
+        found_header, _ = resolve_dat_column_names(
+            found_header, num_cols, first_data_line_no=0
+        )
 
     # Apply names
     for i, colname in enumerate(table.colnames):

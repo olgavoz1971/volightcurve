@@ -197,7 +197,9 @@ standard, and should not be cited as one. Prefer VOTable when you need the
 full annotation model; treat ASCII/ECSV as a best-effort carrier for the
 same ideas.
 
-Keyword and codec details: [docs/io_contract.md](docs/io_contract.md).
+Keyword and codec details: [docs/io_contract.md](docs/io_contract.md)
+(including ``.dat`` §4b: last / role-canonical header selection, name→role
+typing, structural failback, free-text ``other`` columns).
 
 ## I/O contract
 

@@ -88,6 +88,70 @@ private ``photcal:`` mapping.
 
 Empty ``ZP_FLUX_UNIT`` means dimensionless on the wire (see ``vo_unit_codec.py``).
 
+## 4b. ``.dat`` column header selection and typing
+
+These rules apply to the shared ``.dat`` / ``ascii.commented_header`` codec
+(``read_dat_table``). Do **not** infer string vs float from cell content
+(e.g. ``TR`` vs ``00``).
+
+### Header candidates
+
+1. Take every ``#`` comment that is **not** a ``KEY = value`` metadata
+   assignment.
+2. Split on whitespace. A line is a **header candidate** when its word count
+   equals the number of fields in every data row.
+
+### Name → role (by sense)
+
+Classify each header **token** (case-insensitive) into exactly one role:
+
+| Role | Sense (name contains / equals) |
+|------|--------------------------------|
+| ``error`` | ``err``, ``uncert``, ``sigma``, or the whole name is ``error`` (checked first so ``mag_err`` is error, not mag) |
+| ``time`` | ``time``, ``jd``, or ``mjd`` |
+| ``mag`` | ``mag`` or ``magnitude``, or the ambiguous name ``phot`` (defaults to magnitude domain) |
+| ``flux`` | ``flux`` |
+| ``other`` | anything else (e.g. ``Observ``, ``label``, ``sector``, ``flag``, ``site``) |
+
+Substring checks use the lowered token (so ``Rmag`` → mag, ``JDhel2400000+`` →
+time, ``flux_error`` → error).
+
+### Choosing the winning header
+
+1. A candidate is **role-canonical** when it has at least two words and
+   **every word except the last** has role ``time``, ``mag``, ``flux``, or
+   ``error`` (the last word may be any user label name).
+2. If any role-canonical candidates exist, the winner is the **last** of those
+   (file order).
+3. Otherwise the winner is the **last** width-matching candidate.
+4. If there is no width-matching candidate: legacy three-column files may use
+   positional ``col1``…``col3`` (later promoted); other widths fail ingest.
+
+### Structural check and failback
+
+After the winning header is chosen, classify all column names with the same
+role map. The layout is valid only when:
+
+- exactly **one** ``time`` column;
+- exactly **one** photometry column that is either ``mag`` **or** ``flux``
+  (not both, not neither);
+- at most **one** ``error`` column (zero or one).
+
+If that check **fails**:
+
+| Data width | Failback column names |
+|------------|------------------------|
+| 3 | ``jd``, ``mag``, ``mag_err`` |
+| 4 | ``jd``, ``mag``, ``mag_err``, ``label`` |
+| otherwise | hard-fail (no silent invent) |
+
+### Cell typing
+
+- Role ``other`` → free-text **string** column (including failback ``label``).
+- All other roles → numeric (``float``; token ``nan`` allowed).
+- There is **no** closed allowlist of free-text names (``label`` / ``sector`` /
+  ``flag`` alone). Any ``other`` column is a string.
+
 ## 5. Photometry domain (non-VO)
 
 **No ``DOMAIN=`` keyword.** Domain is carried by **column names** (and by
