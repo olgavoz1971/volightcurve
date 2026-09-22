@@ -28,6 +28,50 @@ venv with ``pip install -e``.
 - Fail explicitly when calibration is incomplete — writers do **not** invent
   zero points.
 
+## The in-memory product (`VOLightCurve`)
+
+``read_lightcurve`` (or ``assemble_volightcurve``) returns a **`VOLightCurve`**:
+the package’s normalised lightcurve **product** between file ingest and your
+own plotting or analysis code.
+
+**What you actually work with**
+
+- **Tabular photometry** lives in an Astropy ``Table`` (``volc.table``): one row
+  per epoch, one column per quantity the file carried (time, mag or flux,
+  uncertainty, labels, filter text, and so on).
+- **Time calibration** (origin, timescale, reference position) lives on
+  ``volc.timesys`` (and related VOTable TIMESYS metadata when present).
+- **Photometric calibration** per photometry column lives in
+  ``volc.photdms`` (filter + ``PhotCal``), when the file supplied enough
+  PhotDM / keyword metadata.
+
+**Column names are not the contract.** A time column may be called
+``obs_time``, ``JD``, ``MJD``, or something else. A flux may sit in a column
+named ``phot``; an error may be ``flux_error`` while the values are
+magnitudes. Host code must **not** assume ``table["mag"]`` or ``table["jd"]``
+unless a specific file format guarantees those names (see
+[docs/io_contract.md](docs/io_contract.md) for non-VO header conventions).
+
+**UCDs are how we express column roles.** Each column may carry a
+[Unified Content Descriptor (UCD)](https://www.ivoa.net/Documents/latest/UCD.html) string
+in column metadata (for example ``time.epoch``, ``phot.mag``, ``phot.flux``,
+``stat.error;phot.mag``). The package uses UCDs — not header spelling — to
+answer “which column is time?”, “which is flux?”, “which is the magnitude
+error?”. After ingest, discover columns with ``get_time_colnames``,
+``get_mag_colnames``, ``get_flux_colnames``, and the error helpers (see
+[Column discovery](#column-discovery) below), or the same functions on
+``volc.table``.
+
+On **VOTable** ingest, UCDs usually come from the file. On **CSV / ``.dat`` /
+ECSV**, the reader assigns or completes UCDs from header-name heuristics and
+``.dat`` layout rules so the same discovery API still works. Auxiliary text
+columns (observatory name, free-text flags) often have **no** science UCD;
+they are not returned by the time/mag/flux helpers.
+
+**Summary:** store and read **values** by column name on ``volc.table`` once
+you have discovered the right names; decide **roles** from UCD metadata and the
+``get_*_colnames`` helpers, not from guessing names across archives.
+
 ## PhotDM / ``PhotCal`` conversion API
 
 Photometric calibration is shaped after the IVOA Recommendation
@@ -131,7 +175,7 @@ python examples/basic_workflow.py
 | ``read_lightcurve`` | First file step (ingest any supported format) |
 | ``write_lightcurve`` | Last file step (format chosen only here) |
 | ``assemble_volightcurve`` | Build a product from a table + explicit calibration |
-| ``VOLightCurve`` | In-memory table + TIMESYS + PhotDM map |
+| ``VOLightCurve`` | Product: ``table`` + TIMESYS + ``photdms`` (see [structure](#volightcurve-structure-technical)) |
 | ``PhotCal`` | PhotDM façade: ``mag_to_flux`` / ``flux_to_mag`` (+ err helpers) |
 | ``PogsonZeroPoint`` | Nested zero-point implementing Pogson scale |
 | ``AsinhZeroPoint`` / ``LinearFluxZeroPoint`` | Stubs for later scales |
@@ -144,16 +188,10 @@ python examples/basic_workflow.py
 ``get_flux_colnames``, ``get_mag_error_colnames``, and
 ``get_flux_error_colnames`` as instance methods.
 
-## Column discovery (do not guess names)
+## Column discovery
 
-Column **names** are not the contract. On VOTable products, roles come from
-**UCDs** (and units). A photometry column may be called ``phot``, ``mag``, or
-something else; its error may be ``flux_error`` even when the values are
-magnitudes, or ``mag_err`` when they are not. After ``read_lightcurve``,
-discover columns with the helpers above — do **not** hard-code
-``table["mag"]`` / ``table["flux_error"]`` unless the file format guarantees
-those names (non-VO ASCII uses the keyword / column-name conventions in
-[docs/io_contract.md](docs/io_contract.md)).
+Use the helpers below on a ``VOLightCurve`` or on any ``astropy.table.Table``
+that already has UCD metadata (see [The in-memory product](#the-in-memory-product-volightcurve)).
 
 ```python
 from volightcurve import read_lightcurve
@@ -221,7 +259,35 @@ pytest -q
 
 Optional for the example plots: ``matplotlib``.
 
-## Layout
+## `VOLightCurve` structure (technical)
+
+```text
+VOLightCurve
+├── table              astropy.table.Table — row data (all columns)
+│   ├── colnames       file-dependent labels (obs_time, phot, JD, mag, …)
+│   ├── [col].data     numpy / MaskedColumn values
+│   ├── [col].unit     astropy Unit when known
+│   ├── [col].info.meta['ucd']   IVOA role string (discovery API reads this)
+│   └── .meta          table-level keys (period, comments, ECSV flat keys, …)
+├── timesys            TimeSys — timeorigin (JD0), timescale, refposition
+├── photdms            dict column_name → PhotDM (filter + PhotCal), when parsed
+├── coosys             optional coordinate metadata (VOTable)
+└── timesys_by_id, field_timesys_ref, …   VOTable TIMESYS wiring when present
+```
+
+- **Values** are plain table columns; nothing is duplicated in a parallel
+  “curve” object.
+- **Roles** for library code are the **UCD** on each column’s
+  ``info.meta`` (plus units for ambiguous ``phot``). ``find_columns_by_ucd``
+  and ``get_*_colnames`` scan ``table`` only; they do not interpret
+  ``colnames`` spelling except where ingest heuristics already wrote a UCD
+  from the header name.
+- **Ingest paths:** VOTable → ``_ingest_votable`` (UCDs from FIELDs, gap-fill
+  from names); other formats → ``apply_non_votable_heuristics`` (``.dat`` header
+  selection, comment keywords, ``_promote_to_vo_standards`` for UCD/unit
+  assignment). Details: [docs/io_contract.md](docs/io_contract.md).
+
+## Repository layout
 
 ```text
 volightcurve/
