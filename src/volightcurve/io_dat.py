@@ -218,7 +218,9 @@ def _parse_dat_cell(
     """
     if col_name in free_text_names:
         return token
-    if token.lower() == "nan":
+    if token == "" or token.lower() == "nan":
+        return float("nan")
+    if token[:1] in "<>":
         return float("nan")
     try:
         return float(token)

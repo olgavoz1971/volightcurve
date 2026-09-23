@@ -7,7 +7,10 @@ ECSV ``meta`` keys. See ``docs/volightcurve_io_contract.md``.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any
+
+import numpy as np
 
 from volightcurve.io_keywords import (
     KEY_EFFECTIVE_WAVELENGTH,
@@ -21,6 +24,7 @@ from volightcurve.io_keywords import (
     KEY_ZP_FLUX,
     KEY_ZP_FLUX_UNIT,
     KEY_ZP_MAG,
+    KEY_SENTINEL,
     KEY_ZP_MAG_UNIT,
     WRITE_KEYWORD_ORDER,
     is_metadata_assignment_line,
@@ -30,6 +34,73 @@ from volightcurve.io_keywords import (
 from volightcurve.vo_unit_codec import to_internal, to_wire
 
 logger = logging.getLogger(__name__)
+
+# Absolute tolerance for matching declared SENTINEL floats. Not ``==``.
+SENTINEL_ABSOLUTE_TOLERANCE = 1e-5
+_CENSORED_TOKEN = re.compile(r"^\s*[<>]")
+
+
+def coerce_censored_tokens(table) -> None:
+    """Turns ``<`` / ``>`` cells into NaN when the rest of the column is numeric.
+
+    A censored magnitude must not abort ingest while a sibling flux column is
+    still usable. Text columns (camera, filter, dates) are left unchanged.
+
+    Args:
+        table (astropy.table.Table): Table after read. Numeric-looking columns
+            that contain a censored token are replaced with floats.
+    """
+    for name in table.colnames:
+        column = table[name]
+        if getattr(column.dtype, "kind", "") not in ("U", "S", "O"):
+            continue
+        parsed: list[float] = []
+        saw_censor = False
+        numeric_column = True
+        for value in column:
+            text = "" if value is None else str(value).strip()
+            if text == "" or text.lower() == "nan" or _CENSORED_TOKEN.match(text):
+                if _CENSORED_TOKEN.match(text):
+                    saw_censor = True
+                parsed.append(float("nan"))
+                continue
+            try:
+                parsed.append(float(text))
+            except ValueError:
+                numeric_column = False
+                break
+        if numeric_column and saw_censor:
+            table[name] = np.array(parsed, dtype=float)
+
+
+def apply_declared_sentinels(table, sentinels: list[float] | None) -> None:
+    """Replaces declared sentinel floats with NaN using a close comparison.
+
+    Args:
+        table (astropy.table.Table): Numeric columns are updated in place.
+        sentinels (list, optional): Floats from repeated ``SENTINEL`` keywords.
+    """
+    if not sentinels:
+        return
+    targets = [float(value) for value in sentinels]
+    for name in table.colnames:
+        column = table[name]
+        if getattr(column.dtype, "kind", "") not in ("f", "i", "u"):
+            continue
+        values = np.array(column, dtype=float)
+        mask = np.zeros(values.shape, dtype=bool)
+        for target in targets:
+            mask |= np.isclose(
+                values,
+                target,
+                rtol=0.0,
+                atol=SENTINEL_ABSOLUTE_TOLERANCE,
+                equal_nan=False,
+            )
+        if not mask.any():
+            continue
+        values[mask] = np.nan
+        table[name] = values
 
 
 def _coerce_float(raw: str | float | int | None) -> float | None:
@@ -75,6 +146,9 @@ def collect_calibration_from_comments(comments: list[str] | None) -> dict[str, A
         if parsed is None:
             continue
         key, value = parsed
+        if key == KEY_SENTINEL:
+            _append_sentinel(collected, value)
+            continue
         if key in {
             KEY_JD0,
             KEY_EPOCH,
@@ -91,6 +165,20 @@ def collect_calibration_from_comments(comments: list[str] | None) -> dict[str, A
         else:
             collected[key] = value
     return collected
+
+
+def _append_sentinel(collected: dict[str, Any], raw: str | float | int | None) -> None:
+    """Appends one declared missing-data float to ``collected['SENTINEL']``.
+
+    Args:
+        collected (dict): Calibration map being built.
+        raw: Keyword value from one ``SENTINEL`` line.
+    """
+    number = _coerce_float(raw)
+    if number is None:
+        return
+    sentinels = collected.setdefault(KEY_SENTINEL, [])
+    sentinels.append(number)
 
 
 def collect_calibration_from_flat_meta(meta: dict | None) -> dict[str, Any]:
@@ -115,6 +203,13 @@ def collect_calibration_from_flat_meta(meta: dict | None) -> dict[str, Any]:
         if parsed is None:
             continue
         key, value = parsed
+        if key == KEY_SENTINEL:
+            if isinstance(raw_val, (list, tuple)):
+                for item in raw_val:
+                    _append_sentinel(collected, item)
+            else:
+                _append_sentinel(collected, value)
+            continue
         if key in {
             KEY_JD0,
             KEY_EPOCH,
@@ -148,7 +243,11 @@ def merge_calibration_sources(
     """
     merged = collect_calibration_from_flat_meta(meta)
     from_comments = collect_calibration_from_comments(comments)
+    sentinels = list(merged.pop(KEY_SENTINEL, []) or [])
+    sentinels.extend(from_comments.pop(KEY_SENTINEL, []) or [])
     merged.update(from_comments)
+    if sentinels:
+        merged[KEY_SENTINEL] = sentinels
     return merged
 
 
@@ -221,6 +320,11 @@ def format_keyword_comment_lines(calibration: dict[str, Any]) -> list[str]:
             wire = to_wire(to_internal(value))
             lines.append(f"{key} = {wire}")
             continue
+        if key == KEY_SENTINEL:
+            items = value if isinstance(value, (list, tuple)) else [value]
+            for item in items:
+                lines.append(f"{key} = {item}")
+            continue
         lines.append(f"{key} = {value}")
     return lines
 
@@ -241,6 +345,10 @@ def calibration_dict_from_volc(volc) -> dict[str, Any]:
 
     meta = getattr(volc, "table", None)
     table_meta = (meta.meta if meta is not None else None) or {}
+    raw_sentinels = table_meta.get(KEY_SENTINEL)
+    if raw_sentinels is not None:
+        items = raw_sentinels if isinstance(raw_sentinels, (list, tuple)) else [raw_sentinels]
+        calibration[KEY_SENTINEL] = [float(item) for item in items]
     if table_meta.get("period") is not None:
         calibration[KEY_PERIOD] = float(table_meta["period"])
     if table_meta.get("epoch") is not None:

@@ -49,6 +49,19 @@ def test_label_falls_back_to_leftmost_non_science_column():
     assert get_label_colnames(table) == ["plate"]
 
 
+def test_per_row_date_is_not_the_label():
+    """A unique timestamp column is skipped; a repeated camera name is the label."""
+    n = 40
+    table = Table()
+    table["jd"] = np.linspace(2459000.0, 2459040.0, n)
+    table["mag"] = np.full(n, 16.2)
+    table["UT Date"] = [f"2012-02-{i:02d}.1" for i in range(1, n + 1)]
+    table["Camera"] = ["ba" if i < 20 else "bb" for i in range(n)]
+    _ucd(table, "jd", "time.epoch")
+    _ucd(table, "mag", "phot.mag")
+    assert get_label_colnames(table) == ["Camera"]
+
+
 def test_dat_ingest_assigns_meta_id_without_renaming():
     """A free-text column becomes the label and receives ``meta.id``."""
     payload = b"""# JD0 = 0

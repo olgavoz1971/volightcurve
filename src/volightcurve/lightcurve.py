@@ -881,12 +881,34 @@ def column_main_role(table: Table, colname: str) -> str | None:
     return None
 
 
+def _is_per_row_stamp(table: Table, colname: str) -> bool:
+    """True when a column has a different value on nearly every row.
+
+    A timestamp such as ``UT Date`` must not be the grouping label. Small
+    tables are never treated as stamps.
+
+    Args:
+        table (astropy.table.Table): Product table.
+        colname (str): Candidate label column.
+
+    Returns:
+        bool: True when the column is unique per row on a long table.
+    """
+    n_rows = len(table)
+    if n_rows < 30:
+        return False
+    values = np.asarray(table[colname], dtype=object)
+    distinct = len(set(values.tolist()))
+    return distinct >= 30 and distinct / n_rows > 0.8
+
+
 def get_label_colnames(table: Table) -> list[str]:
     """Returns the designated per-epoch label column, if any.
 
     Prefers the leftmost column whose UCD contains ``meta.code`` or
     ``meta.id``. Otherwise returns the leftmost column that is not time,
-    magnitude, flux, or an error. See ``docs/io_contract.md`` §8.
+    magnitude, flux, or an error. Columns that are unique on almost every
+    row (observation dates) are skipped. See ``docs/io_contract.md`` §8.
 
     Args:
         table (astropy.table.Table): Product or file table.
@@ -898,11 +920,12 @@ def get_label_colnames(table: Table) -> list[str]:
         name
         for name in table.colnames
         if any(fragment in _column_ucd(table, name) for fragment in LABEL_UCD_FRAGMENTS)
+        and not _is_per_row_stamp(table, name)
     ]
     if labelled:
         return [labelled[0]]
     for name in table.colnames:
-        if column_main_role(table, name) is None:
+        if column_main_role(table, name) is None and not _is_per_row_stamp(table, name):
             return [name]
     return []
 
@@ -1304,6 +1327,14 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
         (volc.table.meta or {}).get("comments"),
         volc.table.meta,
     )
+    from volightcurve.io_keywords import KEY_SENTINEL
+    from volightcurve.io_meta import apply_declared_sentinels, coerce_censored_tokens
+
+    sentinels = list(calibration.get(KEY_SENTINEL) or [])
+    if sentinels:
+        volc.table.meta[KEY_SENTINEL] = sentinels
+    coerce_censored_tokens(volc.table)
+    apply_declared_sentinels(volc.table, sentinels)
 
     if KEY_JD0 in calibration:
         volc.timesys.timeorigin = float(calibration[KEY_JD0])

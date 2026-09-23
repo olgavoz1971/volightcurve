@@ -57,6 +57,7 @@ origins on write.
 | ``FILTER`` / ``BAND`` | Filter identifier (``BAND`` is a read alias) |
 | ``FILTER_NAME`` | Human-readable filter name (optional) |
 | ``EFFECTIVE_WAVELENGTH`` / ``EFFECTIVE_WAVELENGTH_UNIT`` | Optional passband location |
+| ``SENTINEL`` | Optional. One float per line. Repeat the keyword for a list. Each listed value in a numeric column is missing data (stored as NaN). See §9. |
 
 ### Write preference
 
@@ -79,6 +80,8 @@ private ``photcal:`` mapping.
 # FILTER = TESS/TESS.Red
 # PERIOD = 1.23
 # EPOCH = 2459000.25
+# SENTINEL = 99.99
+# SENTINEL = 99.999
 # optional free-text description lines
 # jd mag mag_err
 2459000.0 12.1 0.01
@@ -253,3 +256,38 @@ label. The others are still exported.
 **Ingest:** when that column has no UCD from the label-role list, store
 ``meta.id`` on it. Do not rename the column. An existing ``meta.code`` or
 ``meta.id`` UCD is kept.
+
+## 9. Ingest cells (do not drop columns)
+
+This package keeps every column it read. Several time, magnitude, flux, or
+error columns are allowed. It does **not** choose a single series and delete
+the rest. A host that plots one curve (for example ``CurveDash``) may copy
+one time column and one photometry column into its own working object. That
+copy is outside this package. A file round-trip through ``read_lightcurve`` /
+``write_lightcurve`` still has the extra columns. A download from the host’s
+single-series object will not.
+
+### Cells
+
+After roles and UCDs are assigned:
+
+- A finite float stays a float.
+- ``nan`` / ``NaN`` and an empty numeric field become NaN.
+- A token with a leading ``<`` or ``>`` (for example ``>16.766``) fails ingest
+  (``LightcurveIOError``). No warning-only path.
+- If ``SENTINEL`` lines are present, each listed float is replaced with NaN
+  in numeric columns. Match with a close comparison (small absolute
+  tolerance), not with ``==``. Python equality on floats is exact bitwise
+  equality and will miss values that came through a different parse. The
+  list is kept on the product and written back when the file format uses
+  these keywords. Values not on the list stay numbers (``99.990`` is data
+  when it was not declared).
+- Incomplete photcal does not fail ingest.
+- A photometry column that is entirely NaN does **not** fail ingest while
+  another photometry column still has a finite value.
+
+This package does not delete sibling magnitude or flux columns. When a host
+builds one series it should prefer a column that has at least one finite
+value. If magnitude is all NaN and flux is not, the series uses flux (and
+its error, if present). If both still have finite values, the host may keep
+its own tie-break.
