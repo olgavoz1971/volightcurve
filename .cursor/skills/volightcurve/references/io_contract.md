@@ -1,5 +1,3 @@
-> **Skill bundle copy.** Canonical source in the package checkout: `docs/io_contract.md`. Re-copy after editing the canonical file.
-
 # volightcurve file I/O contract
 
 **PhotCal / PhotDM:** Magnitude↔flux conversion uses the nested PhotDM shape
@@ -163,6 +161,7 @@ VOTable unit/UCD on the VO path).
 | flux | ``jd`` | ``flux`` | ``flux_err`` |
 
 Do not write ambiguous ``phot`` / ``flux_error`` for these formats.
+When several columns share one role, see §8 (``mag-1``, ``mag-2``, …).
 
 ### Read
 
@@ -179,9 +178,9 @@ Do not write ambiguous ``phot`` / ``flux_error`` for these formats.
 3. Missing ``JD0`` on legacy ``.dat`` ingest defaults to ``0`` (documented
    heuristic). Writers must not invent a non-zero origin.
 
-VOTable writing may serialise ``obs_time`` as MJD with
-``timeorigin = 2400000.5`` provided epoch PARAMs use that same origin. That
-remap happens only inside ``write_lightcurve``.
+VOTable writing may change **time values** to MJD and record the origin on
+TIMESYS (the same sense as ``JD0``). Field **names** and **UCDs** stay as on
+the product. See §8.
 
 ## 7. Public API
 
@@ -192,3 +191,65 @@ assemble_volightcurve(table, **calibration) -> VOLightCurve
 ```
 
 Keyword constants: ``io_keywords.py``.
+
+## 8. Export (describe the product; do not re-validate)
+
+**UCD is the source of truth** for column roles. Ingest assigns and promotes
+UCDs. Export does **not** add validation: it must not refuse a file because
+several time, magnitude, flux, or error columns are present, because photcal
+is incomplete, or because names are not a preferred spelling.
+
+**PhotCal:** when ``VOLightCurve.photdms`` has an entry for a column, write
+that calibration with **that** column. Do not drop extra science columns so
+that only one photometry column remains.
+
+### VOTable (UCD-capable)
+
+Write the product table **as stored**:
+
+- Keep column **names**.
+- Write each column’s **UCD** and unit.
+- Do **not** rename fields to ``obs_time`` / ``phot`` / ``flux_error``, and
+  do **not** drop columns that are not in that short list.
+
+**Time values:** the writer may convert the time column to MJD and set
+TIMESYS ``@timeorigin`` (``JD0`` sense) so absolute JD is recoverable.
+``EPOCH`` uses that same origin (§6). The field name and UCD are unchanged.
+
+``write_vo_lightcurve`` must follow this section. The legacy behaviour that
+renames columns and keeps only ``obs_time``, ``phot``, ``flux_error``, and
+``label`` is **retired**.
+
+### Non-VO (CSV, ``.dat``, ECSV)
+
+These files do not carry per-column UCDs. Export the columns that exist.
+Encode **main** roles in column names (from UCDs already on the product):
+
+| Role | One column | Several columns (left to right) |
+|------|------------|----------------------------------|
+| time | ``jd`` | ``jd-1``, ``jd-2``, … |
+| magnitude | ``mag`` | ``mag-1``, ``mag-2``, … |
+| flux | ``flux`` | ``flux-1``, ``flux-2``, … |
+| magnitude error | ``mag_err`` | ``mag_err-1``, ``mag_err-2``, … |
+| flux error | ``flux_err`` | ``flux_err-1``, ``flux_err-2``, … |
+
+Do not drop a column because another column has the same role. Do not invent
+UCDs in the file. Other columns keep a stable non-science name (see labels).
+
+### Per-epoch label column
+
+Discovery (for hosts and for choosing which string column is the label).
+Export still writes **every** column; this rule only **selects** the label.
+
+1. If any column’s UCD is in the label-role list, take the **leftmost** such
+   column. Initial list (extend later): ``meta.code``, ``meta.id``.
+2. Otherwise (no matching UCD, or the format has no UCDs), take the
+   **leftmost** column that is **not** time, flux, magnitude, or error.
+
+Matching is a UCD **fragment** (same style as ``find_columns_by_ucd``).
+Several label-like columns may exist; only the leftmost is the designated
+label. The others are still exported.
+
+**Ingest:** when that column has no UCD from the label-role list, store
+``meta.id`` on it. Do not rename the column. An existing ``meta.code`` or
+``meta.id`` UCD is kept.

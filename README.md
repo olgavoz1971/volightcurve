@@ -72,6 +72,10 @@ they are not returned by the time/mag/flux helpers.
 you have discovered the right names; decide **roles** from UCD metadata and the
 ``get_*_colnames`` helpers, not from guessing names across archives.
 
+**Export** describes that product. It does not re-validate. VOTable keeps
+column names and writes UCDs; CSV / ``.dat`` encode main roles in column
+names. Rules: [docs/io_contract.md](docs/io_contract.md) §8.
+
 ## PhotDM / ``PhotCal`` conversion API
 
 Photometric calibration is shaped after the IVOA Recommendation
@@ -183,6 +187,7 @@ python examples/basic_workflow.py
 | ``find_columns_by_ucd`` | Low-level UCD fragment search on a table |
 | ``get_time_colnames`` / ``get_mag_colnames`` / ``get_flux_colnames`` | Primary columns (errors excluded) |
 | ``get_error_colnames`` | ``stat.error`` columns; optional ``base_ucd`` filter |
+| ``get_label_colnames`` | Designated per-epoch label (``meta.code`` / ``meta.id``, else leftmost non-science column) |
 
 ``VOLightCurve`` also exposes ``get_time_colnames``, ``get_mag_colnames``,
 ``get_flux_colnames``, ``get_mag_error_colnames``, and

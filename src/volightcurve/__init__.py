@@ -73,6 +73,7 @@ __all__ = [
     "get_mag_colnames",
     "get_flux_colnames",
     "get_error_colnames",
+    "get_label_colnames",
     "print_col_ucd",
     "is_mag_column",
     "is_flux_column",

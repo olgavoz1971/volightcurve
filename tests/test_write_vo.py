@@ -63,5 +63,38 @@ def test_volightcurve_write():
     print("✓ VOLightCurve ingest roundtrip test passed successfully!")
 
 
+def test_votable_export_keeps_column_names_and_extra_columns():
+    """VOTable write does not rename jd/mag or drop a non-science column."""
+    from volightcurve import assemble_volightcurve, write_lightcurve
+    from volightcurve.time_reference import JD_TO_MJD
+
+    table = Table()
+    table["jd"] = np.array([2459000.0, 2459001.0])
+    table["mag"] = np.array([12.1, 12.2])
+    table["mag_err"] = np.array([0.01, 0.02])
+    table["note"] = np.array(["a", "b"])
+    volc = assemble_volightcurve(
+        table,
+        timeorigin=0.0,
+        filter_id="TESS/TESS.Red",
+        zp_flux=1.0,
+        zp_mag=20.0,
+    )
+    payload = write_lightcurve(volc, "votable")
+    xml = payload.decode("utf-8")
+    assert 'name="jd"' in xml
+    assert 'name="mag"' in xml
+    assert 'name="note"' in xml
+    assert 'name="obs_time"' not in xml
+
+    restored = VOLightCurve(io.BytesIO(payload))
+    assert list(restored.table.colnames) == ["jd", "mag", "mag_err", "note"]
+    np.testing.assert_allclose(
+        restored.table["jd"],
+        np.array([2459000.0, 2459001.0]) - JD_TO_MJD,
+    )
+    assert restored.timesys.timeorigin == JD_TO_MJD
+
+
 if __name__ == "__main__":
     test_volightcurve_write()

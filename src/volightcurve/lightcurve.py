@@ -835,6 +835,101 @@ def is_flux_column(table: Table, colname: str | None):
     return 'phot.flux' in table[colname].info.meta.get('ucd', '')
 
 
+LABEL_UCD_FRAGMENTS = ("meta.code", "meta.id")
+DEFAULT_LABEL_UCD = "meta.id"
+
+
+def _column_ucd(table: Table, colname: str) -> str:
+    """Returns the UCD string stored on a column, or an empty string.
+
+    Args:
+        table (astropy.table.Table): Source table.
+        colname (str): Column name.
+
+    Returns:
+        str: UCD text from ``info.meta``, or ``""``.
+    """
+    meta = table[colname].info.meta
+    if not meta:
+        return ""
+    return str(meta.get("ucd") or "")
+
+
+def column_main_role(table: Table, colname: str) -> str | None:
+    """Classifies a column as time, magnitude, flux, or a matching error.
+
+    Uses UCD fragments only. Columns without a science UCD return ``None``.
+
+    Args:
+        table (astropy.table.Table): Source table.
+        colname (str): Column name.
+
+    Returns:
+        str or None: ``time``, ``mag``, ``flux``, ``mag_err``, ``flux_err``, or None.
+    """
+    ucd = _column_ucd(table, colname)
+    if "time.epoch" in ucd:
+        return "time"
+    if "stat.error" in ucd and "phot.mag" in ucd:
+        return "mag_err"
+    if "stat.error" in ucd and "phot.flux" in ucd:
+        return "flux_err"
+    if "phot.mag" in ucd:
+        return "mag"
+    if "phot.flux" in ucd:
+        return "flux"
+    return None
+
+
+def get_label_colnames(table: Table) -> list[str]:
+    """Returns the designated per-epoch label column, if any.
+
+    Prefers the leftmost column whose UCD contains ``meta.code`` or
+    ``meta.id``. Otherwise returns the leftmost column that is not time,
+    magnitude, flux, or an error. See ``docs/io_contract.md`` §8.
+
+    Args:
+        table (astropy.table.Table): Product or file table.
+
+    Returns:
+        list of str: Zero or one column name.
+    """
+    labelled = [
+        name
+        for name in table.colnames
+        if any(fragment in _column_ucd(table, name) for fragment in LABEL_UCD_FRAGMENTS)
+    ]
+    if labelled:
+        return [labelled[0]]
+    for name in table.colnames:
+        if column_main_role(table, name) is None:
+            return [name]
+    return []
+
+
+def assign_label_column_ucd(table: Table) -> None:
+    """Stores a label-role UCD on the designated label column when missing.
+
+    Does not rename the column. If the column already has a UCD containing
+    ``meta.code`` or ``meta.id``, it is left unchanged. Otherwise the UCD is
+    set to ``meta.id``. See ``docs/io_contract.md`` §8.
+
+    Args:
+        table (astropy.table.Table): Product table after role promotion.
+    """
+    names = get_label_colnames(table)
+    if not names:
+        return
+    name = names[0]
+    ucd = _column_ucd(table, name)
+    if any(fragment in ucd for fragment in LABEL_UCD_FRAGMENTS):
+        return
+    column = table[name]
+    if column.info.meta is None:
+        column.info.meta = {}
+    column.info.meta["ucd"] = DEFAULT_LABEL_UCD
+
+
 def get_error_colnames(table, base_ucd=None):
     """Retrieves names of columns containing statistical errors from the table.
 
@@ -1296,6 +1391,8 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
                     if has_zp_flux:
                         photdm.photcal.zp_flux = zp_flux
 
+    assign_label_column_ucd(volc.table)
+
 
 def _mag0_declared_in_comments(table) -> bool:
     """Return True when a ``MAG0=`` assignment appears in table comment metadata.
@@ -1387,6 +1484,7 @@ class VOLightCurve:
         _apply_gavo_votable_metadata(self, gavo_tree)
 
         self.table = _promote_to_vo_standards(self.table)
+        assign_label_column_ucd(self.table)
         if not self.timesys.timeorigin:
             self.timesys.timeorigin = _pickup_jd0_from_table(self.table)
 
@@ -1644,11 +1742,19 @@ class VOLightCurve:
         """
         return get_error_colnames(self.table, base_ucd='phot.flux')
 
+    def get_label_colnames(self):
+        """Returns the designated per-epoch label column, if any.
+
+        Returns:
+            list of str: Zero or one column name. See ``get_label_colnames``.
+        """
+        return get_label_colnames(self.table)
+
     def write_votable(
         self,
         output_stream_or_path,
         table_name: str,
-        filter_identifier: str,
+        filter_identifier: str | None = None,
         refposition: str = "HELIOCENTER",
         timescale: str = "UTC", # could we reasonable presume this for old-fashioned handmade scripts?
         timeorigin: float = 0,
@@ -1756,7 +1862,7 @@ def write_vo_lightcurve(
     output_stream_or_path,
     table_data,
     table_name: str,
-    filter_identifier: str,
+    filter_identifier: str | None = None,
     refposition: str = "BARYCENTER",
     timescale: str = "TCB",
     timeorigin: float = 0,
@@ -1785,24 +1891,24 @@ def write_vo_lightcurve(
 ):
     """Writes a lightcurve to a compliant IVOA VOTable (v1.4) XML file/stream.
 
-    This function structures the input table, assigns Standard Unified Content
-    Descriptors (UCDs), links time columns to a `<TIMESYS>` element, groups
-    photometry under a `<GROUP name="photcal">` tag with metadata Parameters,
-    and encodes the output using BINARY base64 or TABLEDATA format.
+    Column names are preserved. UCDs already stored on columns are written
+    through; this function does not rename fields or drop columns
+    (``docs/io_contract.md`` §8). Time-role columns are linked to TIMESYS.
+    Photometry columns that already carry a photometry UCD are linked from
+    the photcal GROUP.
 
     Args:
         output_stream_or_path (str or file-like object): Path or stream to write the output to.
         table_data (astropy.table.Table or pandas.DataFrame or VOLightCurve):
             The source lightcurve containing timing and photometry.
         table_name (str): Value for the `<TABLE name="...">` attribute (Obligatory).
-        filter_identifier (str): Value for the `filterIdentifier` PARAM (Obligatory).
+        filter_identifier (str, optional): Value for the ``filterIdentifier`` PARAM.
+            Omitted from the photcal GROUP when absent.
         refposition (str, optional): Time reference position (e.g. 'BARYCENTER', 'HELIOCENTER').
             Defaults to "BARYCENTER" (Obligatory).
         timescale (str, optional): Time scale. Defaults to "TCB" (Optional).
-        timeorigin (float, optional): Time origin offset added to ``obs_time`` to obtain
-            absolute Julian Date. Use ``0`` when ``obs_time`` holds full JD; use
-            ``2400000.5`` (``JD_TO_MJD``) when ``obs_time`` holds Modified Julian Date.
-            Defaults to ``0``.
+        timeorigin (float, optional): TIMESYS origin (``JD0`` sense) added to
+            time-role columns to obtain absolute Julian Date. Defaults to ``0``.
         votable_description (str, optional): High-level global description. Defaults to None.
         creator (str, optional): Pipeline or entity creator name. Defaults to None.
         zero_point_flux (float, optional): Zero point flux value. Defaults to None.
@@ -1847,59 +1953,7 @@ def write_vo_lightcurve(
             "table_data must be an astropy Table, VOLightCurve, or pandas DataFrame."
         )
 
-    # Heuristic/Positional detection and mapping of columns to standardized names
-    time_col = None
-    for name in ['obs_time', 'time', 'jd', 'mjd']:
-        if name in t.colnames:
-            time_col = name
-            break
-    flux_col = None
-    for name in ['phot', 'flux', 'mag']:
-        if name in t.colnames:
-            flux_col = name
-            break
-    err_col = None
-    for name in ['flux_error', 'flux_err', 'mag_err', 'error', 'err']:
-        if name in t.colnames:
-            err_col = name
-            break
-
-    if time_col and time_col != 'obs_time':
-        t.rename_column(time_col, 'obs_time')
-    if flux_col and flux_col != 'phot':
-        t.rename_column(flux_col, 'phot')
-    if err_col and err_col != 'flux_error':
-        t.rename_column(err_col, 'flux_error')
-
-    for name in ('label', 'sector'):
-        if name in t.colnames and name != 'label':
-            t.rename_column(name, 'label')
-            break
-
-    # Positional fallback if names don't map
-    if 'obs_time' not in t.colnames:
-        if len(t.colnames) > 0:
-            t.rename_column(t.colnames[0], 'obs_time')
-        else:
-            raise ValueError("Table data must contain a time column.")
-    if 'phot' not in t.colnames:
-        if len(t.colnames) > 1:
-            t.rename_column(t.colnames[1], 'phot')
-        else:
-            raise ValueError("Table data must contain a photometry (flux/magnitude) column.")
-    if 'flux_error' not in t.colnames and len(t.colnames) > 2:
-        third_col = t.colnames[2]
-        if third_col != 'label':
-            t.rename_column(third_col, 'flux_error')
-
-    # Construct the strictly defined output table containing standard columns
-    t_out = Table()
-    t_out['obs_time'] = t['obs_time']
-    t_out['phot'] = t['phot']
-    if 'flux_error' in t.colnames:
-        t_out['flux_error'] = t['flux_error']
-    if 'label' in t.colnames:
-        t_out['label'] = t['label']
+    t_out = t
 
     # Convert to VOTableFile structure
     vot_file = vot.from_table(t_out)
@@ -1938,39 +1992,40 @@ def write_vo_lightcurve(
         )
         res.coordinate_systems.append(cs)
 
-    # Standardize Table Fields and cross-link with systems
-    phot_labels = resolve_votable_phot_field_labels(t_out)
+    # Preserve column UCDs. Link time columns to TIMESYS. Do not invent roles.
+    phot_field_ids: list[str] = []
     for f in tab.fields:
-        if f.name == 'obs_time':
-            f.ID = 'obs_time'
-            f.ucd = 'time.epoch'
-            f.unit = 'd'
-            f.ref = 'ts'
-            f.description = 'Time'
-        elif f.name == 'phot':
-            f.ID = 'phot'
-            f.ucd = phot_labels['phot_ucd']
-            f.unit = str(t_out['phot'].unit or 's**-1')
-            f.ref = 'phot_def'
-            f.description = phot_labels['phot_description']
-        elif f.name == 'flux_error':
-            f.ID = 'flux_error'
-            f.ucd = phot_labels['error_ucd']
-            f.unit = str(t_out['flux_error'].unit or 's**-1')
-            f.description = phot_labels['error_description']
-        elif f.name == 'label':
-            f.ID = 'label'
-            f.ucd = 'meta.id;meta.dataset'
-            f.description = 'Dataset or sector label for each observation'
+        f.ID = f.name
+        col = t_out[f.name]
+        ucd = ""
+        if col.info.meta:
+            ucd = str(col.info.meta.get("ucd") or "")
+        if ucd:
+            f.ucd = ucd
+        if "time.epoch" in ucd:
+            f.ref = "ts"
+        if ucd and ("phot.mag" in ucd or "phot.flux" in ucd) and "stat.error" not in ucd:
+            f.ref = "phot_def"
+            phot_field_ids.append(f.name)
+    if not phot_field_ids:
+        for name in t_out.colnames:
+            if name in ("phot", "mag", "flux"):
+                phot_field_ids.append(name)
 
     # Add GROUP ID="phot_def" name="photcal"
     g = Group(vot_file, ID='phot_def', name='photcal')
 
-    # filterIdentifier (Obligatory PARAM)
-    p_fid = Param(vot_file, name='filterIdentifier', value=filter_identifier, datatype='char', arraysize='*')
-    p_fid.utype = 'photDM:PhotometryFilter.identifier'
-    p_fid.ucd = 'meta.id;instr.filter'
-    g.entries.append(p_fid)
+    if filter_identifier:
+        p_fid = Param(
+            vot_file,
+            name="filterIdentifier",
+            value=filter_identifier,
+            datatype="char",
+            arraysize="*",
+        )
+        p_fid.utype = "photDM:PhotometryFilter.identifier"
+        p_fid.ucd = "meta.id;instr.filter"
+        g.entries.append(p_fid)
 
     # zeroPointFlux (Optional PARAM)
     if zero_point_flux is not None:
@@ -2020,9 +2075,15 @@ def write_vo_lightcurve(
         p_wl.ucd = 'em.wl.effective'
         g.entries.append(p_wl)
 
-    # FieldRef linking GROUP back to the phot column
-    fref = FieldRef(vot_file, ref='phot', utype='adhoc:location', config={'version_1_2_or_later': True})
-    g.entries.append(fref)
+    for phot_name in phot_field_ids:
+        g.entries.append(
+            FieldRef(
+                vot_file,
+                ref=phot_name,
+                utype="adhoc:location",
+                config={"version_1_2_or_later": True},
+            )
+        )
 
     res.groups.append(g)
 

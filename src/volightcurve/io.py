@@ -192,6 +192,73 @@ def _votable_binary_flag(format_id: str | None, *, binary: bool) -> bool:
     return binary
 
 
+_NON_VO_ROLE_BASENAME = {
+    "time": "jd",
+    "mag": "mag",
+    "flux": "flux",
+    "mag_err": "mag_err",
+    "flux_err": "flux_err",
+}
+
+
+def table_with_non_vo_column_names(table: Table) -> Table:
+    """Returns a copy whose main-role columns use contract names.
+
+    One column of a role keeps ``jd`` / ``mag`` / ``flux`` / ``mag_err`` /
+    ``flux_err``. Several columns of one role are numbered left to right
+    (``mag-1``, ``mag-2``, …). Other columns keep their names. The input
+    table is not modified. See ``docs/io_contract.md`` §8.
+
+    Args:
+        table (astropy.table.Table): Product table with UCDs already set.
+
+    Returns:
+        astropy.table.Table: Copy ready for CSV, ``.dat``, or ECSV.
+    """
+    from volightcurve.lightcurve import column_main_role
+
+    grouped: dict[str, list[str]] = {role: [] for role in _NON_VO_ROLE_BASENAME}
+    for name in table.colnames:
+        role = column_main_role(table, name)
+        if role in grouped:
+            grouped[role].append(name)
+
+    planned: dict[str, str] = {}
+    for role, names in grouped.items():
+        base = _NON_VO_ROLE_BASENAME[role]
+        if len(names) == 1:
+            planned[names[0]] = base
+        else:
+            for index, name in enumerate(names, start=1):
+                planned[name] = f"{base}-{index}"
+
+    final: dict[str, str] = {}
+    taken: set[str] = set()
+    for name, target in planned.items():
+        final[name] = target
+        taken.add(target)
+    for name in table.colnames:
+        if name in final:
+            continue
+        target = name
+        suffix = 2
+        while target in taken:
+            target = f"{name}-{suffix}"
+            suffix += 1
+        final[name] = target
+        taken.add(target)
+
+    out = table.copy()
+    for name in list(out.colnames):
+        if final[name] != name:
+            out.rename_column(name, f"__nonvo__{name}")
+    for name, target in final.items():
+        source = f"__nonvo__{name}" if target != name else name
+        if source != target:
+            out.rename_column(source, target)
+    return out
+
+
 def _write_comment_header_table(
     table: Table,
     calibration: dict[str, Any],
@@ -344,96 +411,53 @@ def assemble_volightcurve(
     return VOLightCurve.from_table(tab)
 
 
-def _photometry_columns_for_votable(tab: Table) -> tuple[str, str | None]:
-    """Resolves photometry and error column names for VOTable export.
-
-    Args:
-        tab (Table): Source table (``phot``/``flux``/``mag`` naming).
-
-    Returns:
-        tuple: ``(phot_col, err_col_or_None)``.
-
-    Raises:
-        LightcurveIOError: When no photometry column is present.
-    """
-    if "phot" in tab.colnames:
-        err = "flux_error" if "flux_error" in tab.colnames else None
-        if err is None and "phot_err" in tab.colnames:
-            err = "phot_err"
-        return "phot", err
-    if "mag" in tab.colnames:
-        err = "mag_err" if "mag_err" in tab.colnames else None
-        return "mag", err
-    if "flux" in tab.colnames:
-        err = "flux_err" if "flux_err" in tab.colnames else None
-        return "flux", err
-    raise LightcurveIOError("Cannot export VOTable: no photometry column.")
-
-
 def _table_for_votable_codec(volc: VOLightCurve) -> tuple[Table, float]:
-    """Builds a VOTable-shaped table and TIMESYS timeorigin from a product.
+    """Copies the product table for VOTable export and sets the TIMESYS origin.
 
-    Canonical assembly uses absolute JD (``JD0 = 0``) with ``jd`` / ``flux|mag``
-    columns. VOTable writing remaps to ``obs_time`` (MJD) and ``phot`` here —
-    the only format-specific table transform, at write time.
+    Column names, UCDs, and extra columns are kept (``docs/io_contract.md`` §8).
+    When ``JD0`` is zero and a time-role column holds absolute Julian Dates,
+    those values are written as MJD and the origin becomes ``JD_TO_MJD``.
+    The same shift is applied to a numeric ``epoch`` in table meta when that
+    value is also an absolute JD.
 
     Args:
-        volc (VOLightCurve): Assembled lightcurve (any supported column layout).
+        volc (VOLightCurve): Assembled lightcurve.
 
     Returns:
         tuple: ``(table, timeorigin)`` for ``write_vo_lightcurve``.
-
-    Raises:
-        LightcurveIOError: When a time or photometry column is missing.
     """
-    src = volc.table
-    meta = dict(src.meta or {})
+    from volightcurve.lightcurve import get_time_colnames
+    from volightcurve.time_reference import TIME_OFFSET_ABSOLUTE_JD_THRESHOLD
+
+    out = volc.table.copy()
+    out.meta = dict(volc.table.meta or {})
     stored_origin = 0.0
     if volc.timesys is not None and volc.timesys.timeorigin is not None:
         stored_origin = float(volc.timesys.timeorigin)
 
-    if "obs_time" in src.colnames:
-        out = src.copy()
-        out.meta = meta
+    if abs(stored_origin) >= 1e-9:
         return out, stored_origin
 
-    time_col = None
-    for name in ("jd", "time"):
-        if name in src.colnames:
-            time_col = name
-            break
-    if time_col is None:
-        raise LightcurveIOError("Cannot export VOTable: no time column.")
+    shifted = False
+    for name in get_time_colnames(out):
+        values = np.asarray(out[name], dtype=float)
+        finite = values[np.isfinite(values)]
+        if finite.size == 0 or float(np.nanmax(finite)) < TIME_OFFSET_ABSOLUTE_JD_THRESHOLD:
+            continue
+        out[name] = values - JD_TO_MJD
+        shifted = True
 
-    phot_col, err_col = _photometry_columns_for_votable(src)
-    times = np.asarray(src[time_col], dtype=float)
+    if shifted and out.meta.get("epoch") is not None:
+        try:
+            epoch = float(out.meta["epoch"])
+        except (TypeError, ValueError):
+            epoch = None
+        if epoch is not None and epoch >= TIME_OFFSET_ABSOLUTE_JD_THRESHOLD:
+            out.meta["epoch"] = epoch - JD_TO_MJD
 
-    # Absolute JD (JD0 ≈ 0) → MJD column with standard MJD timeorigin.
-    if abs(stored_origin) < 1e-9:
-        obs_time = times - JD_TO_MJD
-        write_origin = float(JD_TO_MJD)
-        if meta.get("epoch") is not None:
-            try:
-                meta["epoch"] = float(meta["epoch"]) - JD_TO_MJD
-            except (TypeError, ValueError):
-                pass
-    else:
-        obs_time = times
-        write_origin = stored_origin
-
-    out = Table()
-    out["obs_time"] = obs_time
-    out["phot"] = np.asarray(src[phot_col], dtype=float)
-    if src[phot_col].unit is not None:
-        out["phot"].unit = src[phot_col].unit
-    if err_col is not None:
-        out["flux_error"] = np.asarray(src[err_col], dtype=float)
-        if src[err_col].unit is not None:
-            out["flux_error"].unit = src[err_col].unit
-    if "label" in src.colnames:
-        out["label"] = src["label"]
-    out.meta = meta
-    return out, write_origin
+    if shifted:
+        return out, float(JD_TO_MJD)
+    return out, stored_origin
 
 
 def _votable_kwargs_from_volc(
@@ -472,11 +496,8 @@ def _votable_kwargs_from_volc(
         "timeorigin": float(timeorigin),
     }
     filt = calibration.get("FILTER")
-    if not filt:
-        raise LightcurveIOError(
-            "Cannot export VOTable: filter identifier is missing."
-        )
-    kwargs["filter_identifier"] = str(filt)
+    if filt:
+        kwargs["filter_identifier"] = str(filt)
 
     if envelope.get("refposition"):
         kwargs["refposition"] = str(envelope["refposition"])
@@ -541,8 +562,8 @@ def write_lightcurve(
     """Writes a ``VOLightCurve`` to the requested format (last file step).
 
     Photcal, narrative comments, and provenance envelope must already live on
-    ``volc``. Format branching (VOTable column remap vs ``#`` comments) happens
-    only here.
+    ``volc``. Format branching (VOTable TIMESYS value shift vs ``#`` comments)
+    happens only here. VOTable export keeps column names (§8).
 
     Args:
         volc (VOLightCurve): Lightcurve to serialise.
@@ -583,7 +604,7 @@ def write_lightcurve(
         )
         payload = buf.getvalue()
     elif codec == "ecsv":
-        tab = volc.table.copy()
+        tab = table_with_non_vo_column_names(volc.table)
         narrative = free_text_comments((tab.meta or {}).get("comments"))
         # Flat calibration keys only — drop leftover non-contract meta.
         tab.meta = {}
@@ -595,11 +616,11 @@ def write_lightcurve(
         payload = buf.getvalue().encode("utf-8")
     elif codec == "dat":
         payload = _write_comment_header_table(
-            volc.table, calibration, delimiter=" "
+            table_with_non_vo_column_names(volc.table), calibration, delimiter=" "
         )
     elif codec == "csv":
         payload = _write_comment_header_table(
-            volc.table, calibration, delimiter=","
+            table_with_non_vo_column_names(volc.table), calibration, delimiter=","
         )
     else:
         raise LightcurveIOError(f"Unsupported lightcurve codec '{codec}'.")
