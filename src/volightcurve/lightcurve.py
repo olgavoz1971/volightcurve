@@ -133,13 +133,15 @@ class PhotCal:
 
     Flat constructor args (``zp_flux``, ``zp_mag``, ``mag_sys``) remain supported
     and build a ``PogsonZeroPoint`` + ``MagnitudeSystem`` (compressed PhotDM).
+    Omitted zero points stay missing. They are not filled with a usable pair.
+    Conversion then raises :class:`PhotCalError`.
     """
 
     def __init__(
         self,
-        zp_flux=1.0,
+        zp_flux=None,
         zp_flux_unit=None,
-        zp_mag=0.0,
+        zp_mag=None,
         zp_mag_unit=None,
         mag_sys="Vega",
         *,
@@ -269,6 +271,50 @@ class PhotCal:
             raise ValueError("Magnitude system must be a string.")
         self.magnitude_system.type = value.strip()
 
+    def conversion_problems(self, *, flux_unit=None, mag_unit=None) -> list[str]:
+        """Lists why this calibration cannot convert magnitude and flux.
+
+        Does not insert default zero points.
+
+        Args:
+            flux_unit: Flux column unit when a flux Quantity is in play.
+            mag_unit: Magnitude unit when a magnitude Quantity is in play.
+
+        Returns:
+            list[str]: Empty when conversion may proceed.
+        """
+        from volightcurve.photcal_check import inspect_conversion_photcal
+
+        zp = self.zero_point
+        zp_flux = None if zp._zp_flux is None else zp._zp_flux.value
+        zp_mag = None if zp._zp_mag is None else zp._zp_mag.value
+        return inspect_conversion_photcal(
+            zp_flux=zp_flux,
+            zp_mag=zp_mag,
+            zp_flux_unit=zp._zp_flux_unit_text,
+            zp_mag_unit=zp._zp_mag_unit_text,
+            flux_unit=flux_unit,
+            mag_unit=mag_unit,
+            zp_flux_unit_unparsed=bool(zp._zp_flux_unit_unparsed),
+            zp_mag_unit_unparsed=bool(zp._zp_mag_unit_unparsed),
+        )
+
+    def _require_conversion(self, *, flux_unit=None, mag_unit=None) -> None:
+        """Raises when this calibration cannot convert.
+
+        Args:
+            flux_unit: Flux column unit, when relevant.
+            mag_unit: Magnitude unit, when relevant.
+
+        Raises:
+            PhotCalError: One or more specific reasons.
+        """
+        from volightcurve.photcal_check import PhotCalError
+
+        problems = self.conversion_problems(flux_unit=flux_unit, mag_unit=mag_unit)
+        if problems:
+            raise PhotCalError(problems)
+
     def mag_to_flux(self, mag):
         """Converts magnitude to flux via the nested ``zero_point``.
 
@@ -277,7 +323,11 @@ class PhotCal:
 
         Returns:
             astropy.units.Quantity: Flux values.
+
+        Raises:
+            PhotCalError: When the zero points or units cannot support conversion.
         """
+        self._require_conversion(mag_unit=getattr(mag, "unit", None))
         return self.zero_point.mag_to_flux(mag)
 
     def flux_to_mag(self, flux):
@@ -288,7 +338,11 @@ class PhotCal:
 
         Returns:
             astropy.units.Quantity: Magnitude values.
+
+        Raises:
+            PhotCalError: When the zero points or units cannot support conversion.
         """
+        self._require_conversion(flux_unit=getattr(flux, "unit", None))
         return self.zero_point.flux_to_mag(flux)
 
     def mag_err_to_flux_err(self, mag, mag_err):
@@ -300,7 +354,11 @@ class PhotCal:
 
         Returns:
             astropy.units.Quantity: Flux uncertainties.
+
+        Raises:
+            PhotCalError: When the zero points or units cannot support conversion.
         """
+        self._require_conversion(mag_unit=getattr(mag, "unit", None))
         return self.zero_point.mag_err_to_flux_err(mag, mag_err)
 
     def flux_err_to_mag_err(self, flux, flux_err):
@@ -312,7 +370,11 @@ class PhotCal:
 
         Returns:
             astropy.units.Quantity: Magnitude uncertainties.
+
+        Raises:
+            PhotCalError: When the zero points or units cannot support conversion.
         """
+        self._require_conversion(flux_unit=getattr(flux, "unit", None))
         return self.zero_point.flux_err_to_mag_err(flux, flux_err)
 
     def __repr__(self):
@@ -552,12 +614,7 @@ def extract_photdm(tree):
 
     def process_group(node, text, attrs, childIter):
         if node.name_ == "GROUP" and getattr(node, "name", None) == "photcal":
-            cal_params = {
-                "zp_flux": 1.0,
-                "zp_mag": 0.0,
-                "zp_mag_unit": "mag",
-                "zp_flux_unit": None,
-            }
+            cal_params = {}
             filter_params = {
                 "filter_id": "",
                 "name": None,
@@ -1133,24 +1190,6 @@ def _pickup_jd0_from_table(table):
     return 0.0
 
 
-def _pickup_mag0_from_table(table):
-    """Parses metadata comments to locate the reference magnitude zero point (MAG0).
-
-    Searches the table comments for patterns like "MAG0 = value".
-
-    Args:
-        table (astropy.table.Table): The table to scan.
-
-    Returns:
-        float: The parsed MAG0 value if found, or 0.0 otherwise.
-    """
-    jd0_pattern = re.compile(r"MAG0\s*=\s*([+-]?\d*\.?\d+)")
-    for line in table.meta.get('comments', []):
-        match = jd0_pattern.search(line.upper())
-        if match: return float(match.group(1))
-    return 0.0
-
-
 def _pickup_period_from_table(table):
     """Parses ``PERIOD=`` from comment metadata (folding period in days).
 
@@ -1296,8 +1335,9 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
 
     Mutates ``volc.table``, ``volc.timesys``, and ``volc.photdms`` in place.
     Uses the shared Ticket 8 vocabulary (``JD0``, ``ZP_*``, ``FILTER``, …) from
-    ``#`` comments and flat ECSV ``meta`` keys. Legacy ``MAG0`` alone still implies
-    instrumental ``ZP_FLUX = 1`` dimensionless on ingest only.
+    ``#`` comments and flat ECSV ``meta`` keys. A declared ``MAG0`` or
+    ``ZP_MAG`` is stored as the magnitude zero point. A missing ``ZP_FLUX``
+    stays missing.
 
     Args:
         volc (VOLightCurve): Parsed instance with ``table`` already assigned.
@@ -1363,18 +1403,16 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
 
     has_zp_mag = KEY_ZP_MAG in calibration
     has_zp_flux = KEY_ZP_FLUX in calibration
-    # Mag-only keyword (MAG0 or ZP_MAG without ZP_FLUX) → instrumental flux ZP 1.
-    mag_only = has_zp_mag and not has_zp_flux
-    build_photcal = (has_zp_mag and has_zp_flux) or mag_only
+    build_photcal = has_zp_mag or has_zp_flux
     if build_photcal:
-        zp_mag = float(calibration[KEY_ZP_MAG])
+        zp_mag = float(calibration[KEY_ZP_MAG]) if has_zp_mag else None
         zp_mag_unit = calibration.get(KEY_ZP_MAG_UNIT) or "mag"
         mag_sys = calibration.get(KEY_MAG_SYS) or "Vega"
         if has_zp_flux:
             zp_flux = float(calibration[KEY_ZP_FLUX])
             zp_flux_unit = calibration.get(KEY_ZP_FLUX_UNIT)
         else:
-            zp_flux = 1.0
+            zp_flux = None
             zp_flux_unit = None
     else:
         zp_mag = zp_flux = zp_flux_unit = zp_mag_unit = mag_sys = None

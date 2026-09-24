@@ -20,6 +20,7 @@ from .io import (
 )
 from .io_dat import read_dat_table
 from .io_errors import LightcurveIOError
+from .photcal_check import PhotCalError, inspect_conversion_photcal
 from .io_keywords import (
     CALIBRATION_KEYWORDS,
     KEY_BAND,
@@ -60,6 +61,8 @@ __all__ = [
     "__version__",
     "VOLightCurve",
     "PhotCal",
+    "PhotCalError",
+    "inspect_conversion_photcal",
     "PhotDM",
     "PhotometryFilter",
     "ZeroPoint",

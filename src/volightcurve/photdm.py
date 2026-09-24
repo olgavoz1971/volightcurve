@@ -53,15 +53,17 @@ class ZeroPoint:
 
     def __init__(
         self,
-        zp_flux=1.0,
+        zp_flux=None,
         zp_flux_unit=None,
-        zp_mag=0.0,
+        zp_mag=None,
         zp_mag_unit=None,
     ):
         internal_flux_unit = to_internal(zp_flux_unit)
         self._zp_flux_unit_text = internal_flux_unit
         self._zp_flux_unit_unparsed = False
-        if isinstance(zp_flux, u.Quantity):
+        if zp_flux is None:
+            self._zp_flux = None
+        elif isinstance(zp_flux, u.Quantity):
             self._zp_flux = zp_flux
         else:
             unit = u.dimensionless_unscaled
@@ -81,7 +83,9 @@ class ZeroPoint:
 
         self._zp_mag_unit_text = zp_mag_unit
         self._zp_mag_unit_unparsed = False
-        if isinstance(zp_mag, u.Quantity):
+        if zp_mag is None:
+            self._zp_mag = None
+        elif isinstance(zp_mag, u.Quantity):
             self._zp_mag = zp_mag
         else:
             m_unit = u.mag

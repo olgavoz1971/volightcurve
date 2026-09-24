@@ -271,7 +271,16 @@ single-series object will not.
 
 ### Cells
 
-After roles and UCDs are assigned:
+These passes run for **non-VO** ingest (CSV, ``.dat``, ``from_table``),
+after roles and UCDs are assigned. They do **not** run on VOTable ingest.
+``SENTINEL`` and the ``<`` / ``>`` rule are a non-VO keyword convention.
+This package does not invent a VOTable spelling for them.
+
+**VOTable.** Empty ``<TD>`` cells and the text ``NaN`` arrive already
+masked from the VOTable reader. A written number such as ``99.99`` stays
+that number. There is no second missing-value pass in ``_ingest_votable``.
+
+**Non-VO:**
 
 - A finite float stays a float.
 - ``nan`` / ``NaN`` and an empty numeric field become NaN.
@@ -289,6 +298,9 @@ After roles and UCDs are assigned:
 - Incomplete photcal does not fail ingest.
 - A photometry column that is entirely NaN does **not** fail ingest while
   another photometry column still has a finite value.
+- A table with no finite photometry at all is still a successful read.
+  Whether that is usable is the host's working-domain choice, not a
+  failure inside this package.
 
 This package does not delete sibling magnitude or flux columns. When a host
 builds one series it should prefer a column that has at least one finite

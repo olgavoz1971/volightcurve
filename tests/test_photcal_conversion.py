@@ -38,9 +38,11 @@ def test_flux_err_to_mag_err_matches_snr_form():
 
 
 def test_unit_mismatch_raises():
-    """Incompatible magnitude units raise UnitsError."""
+    """Incompatible magnitude units raise PhotCalError before the arithmetic."""
+    from volightcurve.photcal_check import PhotCalError
+
     pc = PhotCal(zp_flux=1.0, zp_mag=0.0)
-    with pytest.raises(u.UnitsError):
+    with pytest.raises(PhotCalError, match="Jy"):
         pc.mag_to_flux(1.0 * u.Jy)
 
 
