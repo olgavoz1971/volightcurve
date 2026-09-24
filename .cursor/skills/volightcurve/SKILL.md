@@ -82,6 +82,13 @@ This skill folder is self-contained: extra detail lives under
 - **Magnitude ↔ flux** (and σ propagation) **only** via `PhotCal`:
   `mag_to_flux`, `flux_to_mag`, `mag_err_to_flux_err`, `flux_err_to_mag_err`.
   Never embed `10**(-0.4*…)` / `(2.5/ln10)*…` in application scripts.
+  `PhotCal()` does not fill zero points. Those four methods raise
+  `PhotCalError` with specific reasons. `inspect_conversion_photcal` returns
+  the same list and does not write defaults. Magnitude system defaults to
+  Vega. `photcal_defaults` is for a host that fills gaps and warns; do not
+  apply it inside conversion.
+- A declared `MAG0` / `ZP_MAG` without `ZP_FLUX` stores the magnitude zero
+  point only. Do not invent flux zero point `1`.
 - Prefer **VOTable** when rich PhotDM / TIMESYS matter. Non-VOTable formats are
   a practical compromise, not a proposed standard.
 - Incomplete photcal → **fail visibly**; do not invent ZP pairs.

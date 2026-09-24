@@ -248,6 +248,8 @@ Export still writes **every** column; this rule only **selects** the label.
    column. Initial list (extend later): ``meta.code``, ``meta.id``.
 2. Otherwise (no matching UCD, or the format has no UCDs), take the
    **leftmost** column that is **not** time, flux, magnitude, or error.
+3. Skip a column that has a different value on almost every row (for example
+   ``UT Date``). That is a per-point stamp, not a grouping label.
 
 Matching is a UCD **fragment** (same style as ``find_columns_by_ucd``).
 Several label-like columns may exist; only the leftmost is the designated
@@ -269,12 +271,23 @@ single-series object will not.
 
 ### Cells
 
-After roles and UCDs are assigned:
+These passes run for **non-VO** ingest (CSV, ``.dat``, ``from_table``),
+after roles and UCDs are assigned. They do **not** run on VOTable ingest.
+``SENTINEL`` and the ``<`` / ``>`` rule are a non-VO keyword convention.
+This package does not invent a VOTable spelling for them.
+
+**VOTable.** Empty ``<TD>`` cells and the text ``NaN`` arrive already
+masked from the VOTable reader. A written number such as ``99.99`` stays
+that number. There is no second missing-value pass in ``_ingest_votable``.
+
+**Non-VO:**
 
 - A finite float stays a float.
 - ``nan`` / ``NaN`` and an empty numeric field become NaN.
-- A token with a leading ``<`` or ``>`` (for example ``>16.766``) fails ingest
-  (``LightcurveIOError``). No warning-only path.
+- A token with a leading ``<`` or ``>`` (for example ``>16.766``) in an
+  otherwise numeric column becomes NaN. It does not fail the file. Text
+  columns are unchanged. The host then picks a photometry column that still
+  has a finite value.
 - If ``SENTINEL`` lines are present, each listed float is replaced with NaN
   in numeric columns. Match with a close comparison (small absolute
   tolerance), not with ``==``. Python equality on floats is exact bitwise
@@ -285,6 +298,9 @@ After roles and UCDs are assigned:
 - Incomplete photcal does not fail ingest.
 - A photometry column that is entirely NaN does **not** fail ingest while
   another photometry column still has a finite value.
+- A table with no finite photometry at all is still a successful read.
+  Whether that is usable is the host's working-domain choice, not a
+  failure inside this package.
 
 This package does not delete sibling magnitude or flux columns. When a host
 builds one series it should prefer a column that has at least one finite

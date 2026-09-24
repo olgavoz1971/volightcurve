@@ -14,6 +14,7 @@ On a ``VOLightCurve`` instance:
 | ``get_flux_colnames()`` | Primary fluxes (``phot.flux``, errors excluded) |
 | ``get_mag_error_colnames()`` | ``stat.error`` + ``phot.mag`` |
 | ``get_flux_error_colnames()`` | ``stat.error`` + ``phot.flux`` |
+| ``get_label_colnames()`` | One grouping label (``meta.code`` / ``meta.id``, else leftmost non-science column). A column unique on almost every row, such as an observation date, is skipped |
 
 Module-level equivalents: ``find_columns_by_ucd``, ``get_time_colnames``,
 ``get_mag_colnames``, ``get_flux_colnames``, ``get_error_colnames(table,

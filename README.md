@@ -25,8 +25,9 @@ venv with ``pip install -e``.
   **PhotDM / PhotCal** (filter, zero points, magnitude system) where present.
 - Convert magnitude ↔ flux with unit-aware ``PhotCal`` when calibration exists
   (nested PhotDM: ``PhotCal`` → ``ZeroPoint``; Pogson today, Asinh/Linear stubs).
-- Fail explicitly when calibration is incomplete — writers do **not** invent
-  zero points.
+- Ingest may succeed with an incomplete calibration. Conversion raises
+  ``PhotCalError`` and does **not** invent zero points. ``PhotCal()`` with no
+  arguments stores missing zero points and the magnitude system Vega.
 
 ## The in-memory product (`VOLightCurve`)
 
@@ -117,6 +118,14 @@ mag_err = pc.flux_err_to_mag_err(flux, flux_err)
 See also ``examples/basic_workflow.py`` (full mag↔flux↔mag + error round-trip
 on an assembled lightcurve).
 
+``inspect_conversion_photcal`` returns the same reasons as a list and does
+not change the calibration. A missing flux-column unit is not treated as
+dimensionless. Suggested stand-in zero points live in
+``volightcurve.photcal_defaults`` for a host that chooses to fill gaps and
+warn; this package does not apply them during conversion or on write.
+A file keyword ``MAG0`` or ``ZP_MAG`` without ``ZP_FLUX`` stores the
+magnitude zero point only.
+
 Do **not** embed Pogson / asinh formulae in host apps — always call ``PhotCal``.
 Per-column PhotCals on ``VOLightCurve.photdms`` are the long-term model (mag and
 flux columns may differ).
@@ -180,14 +189,16 @@ python examples/basic_workflow.py
 | ``write_lightcurve`` | Last file step (format chosen only here) |
 | ``assemble_volightcurve`` | Build a product from a table + explicit calibration |
 | ``VOLightCurve`` | Product: ``table`` + TIMESYS + ``photdms`` (see [structure](#volightcurve-structure-technical)) |
-| ``PhotCal`` | PhotDM façade: ``mag_to_flux`` / ``flux_to_mag`` (+ err helpers) |
+| ``PhotCal`` | PhotDM façade: ``mag_to_flux`` / ``flux_to_mag`` (+ err helpers). Omitted zero points stay missing |
+| ``PhotCalError`` | Raised by those four methods when conversion is not possible |
+| ``inspect_conversion_photcal`` | Lists those reasons without writing defaults |
 | ``PogsonZeroPoint`` | Nested zero-point implementing Pogson scale |
 | ``AsinhZeroPoint`` / ``LinearFluxZeroPoint`` | Stubs for later scales |
 | ``write_vo_lightcurve`` | Low-level VOTable writer (prefer ``write_lightcurve``) |
 | ``find_columns_by_ucd`` | Low-level UCD fragment search on a table |
 | ``get_time_colnames`` / ``get_mag_colnames`` / ``get_flux_colnames`` | Primary columns (errors excluded) |
 | ``get_error_colnames`` | ``stat.error`` columns; optional ``base_ucd`` filter |
-| ``get_label_colnames`` | Designated per-epoch label (``meta.code`` / ``meta.id``, else leftmost non-science column) |
+| ``get_label_colnames`` | Designated per-epoch label (``meta.code`` / ``meta.id``, else leftmost non-science column). Skips a column that is unique on almost every row |
 
 ``VOLightCurve`` also exposes ``get_time_colnames``, ``get_mag_colnames``,
 ``get_flux_colnames``, ``get_mag_error_colnames``, and
