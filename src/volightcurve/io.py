@@ -444,7 +444,7 @@ def _table_for_votable_codec(volc: VOLightCurve) -> tuple[Table, float]:
         finite = values[np.isfinite(values)]
         if finite.size == 0 or float(np.nanmax(finite)) < TIME_OFFSET_ABSOLUTE_JD_THRESHOLD:
             continue
-        out[name] = values - JD_TO_MJD
+        _assign_column_values_preserving_meta(out, name, values - JD_TO_MJD)
         shifted = True
 
     if shifted and out.meta.get("epoch") is not None:
@@ -458,6 +458,30 @@ def _table_for_votable_codec(volc: VOLightCurve) -> tuple[Table, float]:
     if shifted:
         return out, float(JD_TO_MJD)
     return out, stored_origin
+
+
+def _assign_column_values_preserving_meta(table: Table, name: str, values) -> None:
+    """Replaces column values without dropping UCD, unit, or description.
+
+    Assigning ``table[name] = ndarray`` builds a new column and discards
+    ``info.meta`` (including TIME UCDs).
+
+    Args:
+        table (Table): Table to mutate.
+        name (str): Existing column name.
+        values: New values, same length as the column.
+    """
+    col = table[name]
+    meta = dict(col.info.meta or {})
+    unit = col.unit
+    description = col.info.description
+    table[name] = values
+    table[name].unit = unit
+    if table[name].info.meta is None:
+        table[name].info.meta = {}
+    table[name].info.meta.update(meta)
+    if description is not None:
+        table[name].info.description = description
 
 
 def _votable_kwargs_from_volc(

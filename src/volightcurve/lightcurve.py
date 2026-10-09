@@ -837,6 +837,28 @@ def get_time_colnames(table):
     return find_columns_by_ucd(table, 'time.epoch')
 
 
+# Exact names used when a TIME-role column has no UCD yet (same list as
+# ``resolve_observation_timesys``). Not a substring match.
+OBSERVATION_TIME_NAME_FALLBACKS = ("obs_time", "time", "jd", "mjd")
+DEFAULT_TIME_EPOCH_UCD = "time.epoch"
+
+
+def is_observation_time_column(name: str, ucd: str = "") -> bool:
+    """True when a FIELD is observation time (UCD or TIME-role name).
+
+    Args:
+        name (str): Column / FIELD name.
+        ucd (str): Existing UCD, possibly empty.
+
+    Returns:
+        bool: True when ``time.epoch`` is in ``ucd``, or ``name`` is a TIME-role
+        fallback (``obs_time``, ``time``, ``jd``, ``mjd``).
+    """
+    if DEFAULT_TIME_EPOCH_UCD in (ucd or ""):
+        return True
+    return name in OBSERVATION_TIME_NAME_FALLBACKS
+
+
 def get_mag_colnames(table):
     """Retrieves names of columns containing primary magnitudes from the table, excluding error columns.
 
@@ -1962,7 +1984,10 @@ def write_vo_lightcurve(
 
     Column names are preserved. UCDs already stored on columns are written
     through; this function does not rename fields or drop columns
-    (``docs/io_contract.md`` §8). Time-role columns are linked to TIMESYS.
+    (``docs/io_contract.md`` §8). A TIME-role column with no UCD receives
+    ``time.epoch``. A non-empty time UCD is not rewritten. ``FIELD/@ref``
+    (and the epoch PARAM) point at the ``TIMESYS/@ID`` of the time system
+    actually written on this resource, and are omitted if none exists.
     Photometry columns that already carry a photometry UCD are linked from
     the photcal GROUP.
 
@@ -2043,7 +2068,7 @@ def write_vo_lightcurve(
         info.content = 'Pipeline or contributing resource creator'
         res.infos.append(info)
 
-    # Add TimeSys metadata element
+    # Add TimeSys metadata element. FIELD/@ref below uses this element's ID.
     ts = TimeSys(
         ID='ts',
         refposition=refposition,
@@ -2052,6 +2077,7 @@ def write_vo_lightcurve(
         config={'version_1_4_or_later': True}
     )
     res.time_systems.append(ts)
+    timesys_id = ts.ID
 
     if coosys_system is not None:
         cs = VOTableCooSys(
@@ -2061,7 +2087,7 @@ def write_vo_lightcurve(
         )
         res.coordinate_systems.append(cs)
 
-    # Preserve column UCDs. Link time columns to TIMESYS. Do not invent roles.
+    # Preserve column UCDs. Link TIME-role fields to the TIMESYS we just wrote.
     phot_field_ids: list[str] = []
     for f in tab.fields:
         f.ID = f.name
@@ -2069,10 +2095,17 @@ def write_vo_lightcurve(
         ucd = ""
         if col.info.meta:
             ucd = str(col.info.meta.get("ucd") or "")
-        if ucd:
+        if is_observation_time_column(f.name, ucd):
+            if not ucd:
+                ucd = DEFAULT_TIME_EPOCH_UCD
+                if col.info.meta is None:
+                    col.info.meta = {}
+                col.info.meta["ucd"] = ucd
             f.ucd = ucd
-        if "time.epoch" in ucd:
-            f.ref = "ts"
+            if timesys_id:
+                f.ref = timesys_id
+        elif ucd:
+            f.ucd = ucd
         if ucd and ("phot.mag" in ucd or "phot.flux" in ucd) and "stat.error" not in ucd:
             f.ref = "phot_def"
             phot_field_ids.append(f.name)
@@ -2184,7 +2217,8 @@ def write_vo_lightcurve(
     if epoch is not None:
         p_ep = Param(vot_file, name='epoch', value=float(epoch), datatype='double', unit='d')
         p_ep.ucd = 'time.epoch'
-        p_ep.ref = 'ts'
+        if timesys_id:
+            p_ep.ref = timesys_id
         p_ep.description = 'Reference time'
         tab.params.append(p_ep)
 

@@ -94,6 +94,68 @@ def test_votable_export_keeps_column_names_and_extra_columns():
         np.array([2459000.0, 2459001.0]) - JD_TO_MJD,
     )
     assert restored.timesys.timeorigin == JD_TO_MJD
+    ts_id = _timesys_id(xml)
+    jd_field = _named_field(xml, "jd")
+    assert 'ucd="time.epoch"' in jd_field
+    assert f'ref="{ts_id}"' in jd_field
+
+
+def _timesys_id(xml: str) -> str:
+    """Returns ``TIMESYS/@ID`` from serialised VOTable XML."""
+    import re
+
+    match = re.search(r"<TIMESYS\b([^>]*)>", xml)
+    assert match, "VOTable has no TIMESYS"
+    id_match = re.search(r'\bID="([^"]+)"', match.group(1))
+    assert id_match, "TIMESYS has no ID"
+    return id_match.group(1)
+
+
+def _named_field(xml: str, name: str) -> str:
+    """Returns the FIELD start tag whose ``name`` matches ``name``."""
+    import re
+
+    match = re.search(rf'<FIELD\b[^>]*\bname="{re.escape(name)}"[^>]*>', xml)
+    assert match, f"missing FIELD name={name}"
+    return match.group(0)
+
+
+def test_votable_write_preserves_existing_time_ucd_through_jd_shift():
+    """JD→MJD rewrite must not drop a TIME UCD already on the column."""
+    from volightcurve import assemble_volightcurve, write_lightcurve
+
+    table = Table()
+    table["jd"] = np.array([2459000.0, 2459001.0])
+    table["mag"] = np.array([12.1, 12.2])
+    table["jd"].info.meta = {"ucd": "time.epoch;obs.exposure"}
+    volc = assemble_volightcurve(table, timeorigin=0.0, filter_id="TESS/TESS.Red")
+    xml = write_lightcurve(volc, "votable").decode("utf-8")
+    jd_field = _named_field(xml, "jd")
+    assert 'ucd="time.epoch;obs.exposure"' in jd_field
+    assert f'ref="{_timesys_id(xml)}"' in jd_field
+
+
+def test_write_vo_lightcurve_defaults_time_epoch_and_links_written_timesys():
+    """Bare TIME-role column gets ``time.epoch``; ``ref`` is the written TIMESYS ID."""
+    t = Table()
+    t["obs_time"] = np.array([59000.1, 59000.2])
+    t["phot"] = np.array([12.5, 12.6])
+    buf = io.BytesIO()
+    write_vo_lightcurve(
+        output_stream_or_path=buf,
+        table_data=t,
+        table_name="t",
+        filter_identifier="TESS/TESS.Red",
+        epoch=59000.0,
+        binary=False,
+    )
+    xml = buf.getvalue().decode("utf-8")
+    ts_id = _timesys_id(xml)
+    time_field = _named_field(xml, "obs_time")
+    assert 'ucd="time.epoch"' in time_field
+    assert f'ref="{ts_id}"' in time_field
+    assert f'name="epoch"' in xml
+    assert f'ref="{ts_id}"' in xml
 
 
 if __name__ == "__main__":
