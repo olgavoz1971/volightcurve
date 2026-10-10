@@ -1151,7 +1151,9 @@ def _promote_to_vo_standards(table):
     """Heuristically assigns Unified Content Descriptors (UCDs) and physical units to table columns.
 
     This function scans column names for common patterns (e.g., 'mag', 'flux', 'time')
-    and assigns appropriate Astropy units and UCD metadata values without renaming columns.
+    and assigns UCDs, and units for ``mag`` and time columns, without renaming
+    columns. A flux column without a unit is never given one. Every assignment is
+    logged as a warning and listed in ``table.meta["promoted_by_name"]``.
 
     Args:
         table (astropy.table.Table): The table to process.
@@ -1159,17 +1161,21 @@ def _promote_to_vo_standards(table):
     Returns:
         astropy.table.Table: The table with updated column units and UCD metadata.
     """
+    promoted: list[str] = []
     for colname in table.colnames:
         col = table[colname]
         name_low = colname.lower()
         if not col.unit:
             if 'mag' in name_low:
                 col.unit = u.mag
+                promoted.append(f"{colname}: unit mag (from column name)")
             elif 'flux' in name_low:
-                # col.unit = u.Jy  # default assumption
-                col.unit = 'electron s-1'  # default assumption
+                # A flux column without a unit stays without a unit: the
+                # physical unit is never guessed (it may be normalised flux).
+                pass
             elif any(k in name_low for k in ['time', 'jd', 'mjd']):
                 col.unit = u.d
+                promoted.append(f"{colname}: unit d (from column name)")
 
         if not col.info.meta or not col.info.meta.get('ucd'):
             if col.info.meta is None:
@@ -1191,6 +1197,16 @@ def _promote_to_vo_standards(table):
             if any(k in name_low for k in ['err', 'uncert', 'sigma']) and name_low != 'phot':
                 ucd = f"stat.error;{ucd}"
             col.info.meta['ucd'] = ucd
+            promoted.append(f"{colname}: UCD {ucd} (from column name)")
+    if promoted:
+        if table.meta is None:
+            table.meta = {}
+        table.meta["promoted_by_name"] = promoted
+        logger.warning(
+            "Column roles/units were assigned from column names, not from the "
+            "file: %s",
+            "; ".join(promoted),
+        )
     return table
 
 
