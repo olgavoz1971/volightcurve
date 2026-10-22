@@ -40,18 +40,20 @@ def _timesys_from_gavo_attrs(attrs: dict) -> "TimeSys":
         attrs (dict): Attribute mapping from a GAVO stanxml node.
 
     Returns:
-        TimeSys: Parsed time-system metadata.
+        TimeSys: Parsed time-system metadata; an attribute the file does not declare is
+            ``None`` (``timeorigin`` 0 is a declared value and stays 0.0).
+
+    Raises:
+        ValueError: When ``timeorigin`` is declared but is not a number.
     """
     from volightcurve.lightcurve import TimeSys
 
-    try:
-        timeorigin = float(attrs.get("timeorigin", 0.0) or 0.0)
-    except (TypeError, ValueError):
-        timeorigin = 0.0
+    raw_origin = attrs.get("timeorigin")
+    timeorigin = None if raw_origin in (None, "") else float(raw_origin)
     return TimeSys(
-        refposition=attrs.get("refposition") or "HELIOCENTER",
+        refposition=attrs.get("refposition") or None,
         timeorigin=timeorigin,
-        timescale=attrs.get("timescale") or "UTC",
+        timescale=attrs.get("timescale") or None,
     )
 
 
@@ -211,7 +213,7 @@ def resolve_observation_timesys(volc: VOLightCurve) -> "TimeSys":
         else:
             resolved.append(default_ts)
 
-    origins = {float(ts.timeorigin or 0.0) for ts in resolved}
+    origins = {ts.timeorigin for ts in resolved}
     if len(origins) > 1:
         raise ValueError(
             "Multiple time columns reference different TIMESYS timeorigin values."
@@ -247,7 +249,7 @@ def resolve_timesys_for_table_param(volc: VOLightCurve, param_name: str) -> "Tim
     return resolve_observation_timesys(volc)
 
 
-def time_offset_to_absolute_jd(raw_value: float, timeorigin: float) -> float:
+def time_offset_to_absolute_jd(raw_value: float, timeorigin: float | None) -> float:
     """Converts a VOTable time offset to absolute Julian Date.
 
     Values above ``TIME_OFFSET_ABSOLUTE_JD_THRESHOLD`` are treated as already
@@ -255,28 +257,46 @@ def time_offset_to_absolute_jd(raw_value: float, timeorigin: float) -> float:
 
     Args:
         raw_value (float): Stored PARAM or column value.
-        timeorigin (float): ``TIMESYS/@timeorigin`` for the linked system.
+        timeorigin (float or None): ``TIMESYS/@timeorigin`` for the linked system;
+            ``None`` when the file declares none.
 
     Returns:
         float: Absolute Julian Date.
+
+    Raises:
+        ValueError: When the value is an offset (below the threshold) and the time
+            origin is not declared.
     """
     value = float(raw_value)
     if value >= TIME_OFFSET_ABSOLUTE_JD_THRESHOLD:
         return value
-    return value + float(timeorigin or 0.0)
+    if timeorigin is None:
+        raise ValueError(
+            "Cannot convert a time offset to an absolute Julian Date: "
+            "the time origin (TIMESYS timeorigin) is not declared."
+        )
+    return value + float(timeorigin)
 
 
-def absolute_jd_to_time_offset(absolute_jd: float, timeorigin: float) -> float:
+def absolute_jd_to_time_offset(absolute_jd: float, timeorigin: float | None) -> float:
     """Converts absolute Julian Date to a VOTable time offset for a TIMESYS.
 
     Args:
         absolute_jd (float): Absolute Julian Date in the host session.
-        timeorigin (float): Target ``TIMESYS/@timeorigin`` for export.
+        timeorigin (float or None): Target ``TIMESYS/@timeorigin`` for export.
 
     Returns:
         float: Offset value such that ``absolute_jd = offset + timeorigin``.
+
+    Raises:
+        ValueError: When the time origin is not declared.
     """
-    return float(absolute_jd) - float(timeorigin or 0.0)
+    if timeorigin is None:
+        raise ValueError(
+            "Cannot convert an absolute Julian Date to a time offset: "
+            "the time origin (TIMESYS timeorigin) is not declared."
+        )
+    return float(absolute_jd) - float(timeorigin)
 
 
 def normalise_table_epoch_to_absolute_jd(volc: VOLightCurve, raw_epoch) -> float | None:
@@ -293,7 +313,7 @@ def normalise_table_epoch_to_absolute_jd(volc: VOLightCurve, raw_epoch) -> float
     if raw_epoch is None:
         return None
     timesys = resolve_timesys_for_table_param(volc, "epoch")
-    return time_offset_to_absolute_jd(float(raw_epoch), timesys.timeorigin or 0.0)
+    return time_offset_to_absolute_jd(float(raw_epoch), timesys.timeorigin)
 
 
 def export_absolute_jd_as_time_offset(

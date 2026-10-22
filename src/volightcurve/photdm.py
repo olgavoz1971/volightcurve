@@ -24,11 +24,11 @@ class MagnitudeSystem:
     """photDM:MagnitudeSystem -- catalogue magnitude system label.
 
     Args:
-        type: System name (e.g. ``Vega``, ``AB``).
+        type: System name (e.g. ``Vega``, ``AB``); ``None`` when not declared.
         reference_spectrum: Optional reference spectrum identifier.
     """
 
-    def __init__(self, type: str = "Vega", reference_spectrum: str | None = None):
+    def __init__(self, type: str | None = None, reference_spectrum: str | None = None):
         self.type = type
         self.reference_spectrum = reference_spectrum
 

@@ -131,6 +131,7 @@ def read_lightcurve(
     filename: str | None = None,
     format: str | None = None,
     table_id: str | int | None = None,
+    strict: bool = False,
 ) -> VOLightCurve:
     """Reads a lightcurve file into a ``VOLightCurve`` (first file step).
 
@@ -139,20 +140,27 @@ def read_lightcurve(
         filename (str, optional): Original name for extension detection.
         format (str, optional): Explicit format id (overrides extension).
         table_id (str or int, optional): Embedded VOTable table selector.
+        strict (bool, optional): Read only what a VOTable declares (no interpretation);
+            any other format is rejected. Defaults to ``False``.
 
     Returns:
         VOLightCurve: Parsed lightcurve with timescale and photometry metadata.
 
     Raises:
-        LightcurveIOError: On unsupported format or parse failure.
+        LightcurveIOError: On unsupported format or parse failure, or a non-VOTable
+            format in strict mode.
     """
     codec = normalise_io_format(format, filename=filename)
-    logger.info("read_lightcurve codec=%s filename=%s", codec, filename)
+    logger.info("read_lightcurve codec=%s filename=%s strict=%s", codec, filename, strict)
+    if strict and codec != "votable":
+        raise LightcurveIOError(
+            f"Strict mode reads VOTable files only; format '{codec}' needs interpretation."
+        )
 
     if codec == "votable":
         if hasattr(source, "seek"):
             source.seek(0)
-        return VOLightCurve(source, table_id=table_id)
+        return VOLightCurve(source, table_id=table_id, strict=strict)
 
     if codec == "dat":
         if hasattr(source, "seek"):
@@ -259,6 +267,28 @@ def table_with_non_vo_column_names(table: Table) -> Table:
     return out
 
 
+def _comments_with_description(meta) -> list[str]:
+    """Returns the free comments followed by the table description, one line each.
+
+    The description carries the sentences that say what interpretation did, so the
+    text formats keep them as comment lines. A description already present among
+    the comments is not repeated.
+
+    Args:
+        meta (dict or None): Table ``meta``.
+
+    Returns:
+        list[str]: Comment lines without a leading ``#``.
+    """
+    meta = meta or {}
+    comments = list(free_text_comments(meta.get("comments")))
+    description = str(meta.get("description") or "").strip()
+    for line in description.splitlines():
+        if line.strip() and line.strip() not in comments:
+            comments.append(line.strip())
+    return comments
+
+
 def _write_comment_header_table(
     table: Table,
     calibration: dict[str, Any],
@@ -279,7 +309,7 @@ def _write_comment_header_table(
     for assignment in format_keyword_comment_lines(calibration):
         lines.append(f"# {assignment}")
 
-    comments = free_text_comments((table.meta or {}).get("comments"))
+    comments = _comments_with_description(table.meta)
     # Skip column-header duplicate: if a free comment matches colnames, keep it once.
     col_header = " ".join(table.colnames) if delimiter == " " else ",".join(table.colnames)
     emitted_header = False
@@ -424,18 +454,19 @@ def _table_for_votable_codec(volc: VOLightCurve) -> tuple[Table, float]:
         volc (VOLightCurve): Assembled lightcurve.
 
     Returns:
-        tuple: ``(table, timeorigin)`` for ``write_vo_lightcurve``.
+        tuple: ``(table, timeorigin)`` for ``write_vo_lightcurve``; ``timeorigin`` is
+            ``None`` when the product declares none and no shift was needed.
     """
     from volightcurve.lightcurve import get_time_colnames
     from volightcurve.time_reference import TIME_OFFSET_ABSOLUTE_JD_THRESHOLD
 
     out = volc.table.copy()
     out.meta = dict(volc.table.meta or {})
-    stored_origin = 0.0
+    stored_origin = None
     if volc.timesys is not None and volc.timesys.timeorigin is not None:
         stored_origin = float(volc.timesys.timeorigin)
 
-    if abs(stored_origin) >= 1e-9:
+    if stored_origin is not None and abs(stored_origin) >= 1e-9:
         return out, stored_origin
 
     shifted = False
@@ -488,7 +519,7 @@ def _votable_kwargs_from_volc(
     volc: VOLightCurve,
     calibration: dict[str, Any],
     table_data: Table,
-    timeorigin: float,
+    timeorigin: float | None,
 ) -> dict[str, Any]:
     """Infers ``write_vo_lightcurve`` kwargs from the assembled product only.
 
@@ -496,7 +527,7 @@ def _votable_kwargs_from_volc(
         volc (VOLightCurve): Source product.
         calibration (dict): Keyword map from ``calibration_dict_from_volc``.
         table_data (Table): VO-shaped table (may carry adjusted epoch).
-        timeorigin (float): TIMESYS time origin for the ``obs_time`` column.
+        timeorigin (float or None): TIMESYS time origin for the ``obs_time`` column.
 
     Returns:
         dict: Keyword arguments for ``write_vo_lightcurve``.
@@ -504,10 +535,11 @@ def _votable_kwargs_from_volc(
     meta = dict(table_data.meta or {})
     envelope = dict(meta.get("vo_envelope") or {})
     comments = narrative_file_comments(meta.get("comments"))
+    parts = ([str(meta["description"]).strip()] if meta.get("description") else []) + comments
     description = (
         envelope.get("votable_description")
         or envelope.get("table_description")
-        or (" ".join(comments) if comments else None)
+        or (" ".join(p for p in parts if p) or None)
     )
     table_name = (
         envelope.get("table_name")
@@ -517,10 +549,13 @@ def _votable_kwargs_from_volc(
     )
     kwargs: dict[str, Any] = {
         "table_name": str(table_name),
-        "timeorigin": float(timeorigin),
     }
+    if timeorigin is not None:
+        kwargs["timeorigin"] = float(timeorigin)
+    if volc.photdms:
+        kwargs["photdms"] = volc.photdms
     filt = calibration.get("FILTER")
-    if filt:
+    if filt and not volc.photdms:
         kwargs["filter_identifier"] = str(filt)
 
     if envelope.get("refposition"):
@@ -548,22 +583,23 @@ def _votable_kwargs_from_volc(
         kwargs["period"] = float(meta["period"])
     if meta.get("epoch") is not None:
         kwargs["epoch"] = float(meta["epoch"])
-    if calibration.get("FILTER_NAME"):
-        kwargs["filter_name"] = str(calibration["FILTER_NAME"])
-    if "ZP_FLUX" in calibration:
-        kwargs["zero_point_flux"] = calibration["ZP_FLUX"]
-        kwargs["zero_point_flux_unit"] = calibration.get("ZP_FLUX_UNIT")
-    if "ZP_MAG" in calibration:
-        kwargs["zero_point_ref_mag"] = calibration["ZP_MAG"]
-        kwargs["zero_point_ref_mag_unit"] = calibration.get("ZP_MAG_UNIT", "mag")
-    if "MAG_SYS" in calibration:
-        kwargs["magnitude_system"] = calibration["MAG_SYS"]
-    if "EFFECTIVE_WAVELENGTH" in calibration:
-        kwargs["effective_wavelength"] = calibration["EFFECTIVE_WAVELENGTH"]
-        if calibration.get("EFFECTIVE_WAVELENGTH_UNIT"):
-            kwargs["effective_wavelength_unit"] = calibration[
-                "EFFECTIVE_WAVELENGTH_UNIT"
-            ]
+    if not volc.photdms:
+        if calibration.get("FILTER_NAME"):
+            kwargs["filter_name"] = str(calibration["FILTER_NAME"])
+        if "ZP_FLUX" in calibration:
+            kwargs["zero_point_flux"] = calibration["ZP_FLUX"]
+            kwargs["zero_point_flux_unit"] = calibration.get("ZP_FLUX_UNIT")
+        if "ZP_MAG" in calibration:
+            kwargs["zero_point_ref_mag"] = calibration["ZP_MAG"]
+            kwargs["zero_point_ref_mag_unit"] = calibration.get("ZP_MAG_UNIT", "mag")
+        if "MAG_SYS" in calibration:
+            kwargs["magnitude_system"] = calibration["MAG_SYS"]
+        if "EFFECTIVE_WAVELENGTH" in calibration:
+            kwargs["effective_wavelength"] = calibration["EFFECTIVE_WAVELENGTH"]
+            if calibration.get("EFFECTIVE_WAVELENGTH_UNIT"):
+                kwargs["effective_wavelength_unit"] = calibration[
+                    "EFFECTIVE_WAVELENGTH_UNIT"
+                ]
     if envelope.get("publication_id"):
         kwargs["publication_id"] = str(envelope["publication_id"])
     if envelope.get("coosys_system"):
@@ -573,6 +609,18 @@ def _votable_kwargs_from_volc(
         if envelope.get("coosys_id"):
             kwargs["coosys_id"] = envelope["coosys_id"]
     return kwargs
+
+
+_DEPRECATED_FLAT_PHOTCAL_KWARGS = frozenset(
+    {
+        "filter_identifier",
+        "filter_name",
+        "zero_point_flux",
+        "zero_point_ref_mag",
+        "magnitude_system",
+        "effective_wavelength",
+    }
+)
 
 
 def write_lightcurve(
@@ -619,6 +667,8 @@ def write_lightcurve(
             volc, calibration, table_data, timeorigin
         )
         kwargs.update({k: v for k, v in votable_kwargs.items() if v is not None})
+        if kwargs.keys() & _DEPRECATED_FLAT_PHOTCAL_KWARGS:
+            kwargs.pop("photdms", None)
         kwargs.setdefault("binary", _votable_binary_flag(format, binary=binary))
         buf = io.BytesIO()
         write_vo_lightcurve(
@@ -629,7 +679,7 @@ def write_lightcurve(
         payload = buf.getvalue()
     elif codec == "ecsv":
         tab = table_with_non_vo_column_names(volc.table)
-        narrative = free_text_comments((tab.meta or {}).get("comments"))
+        narrative = _comments_with_description(tab.meta)
         # Flat calibration keys only — drop leftover non-contract meta.
         tab.meta = {}
         apply_calibration_to_table_meta(tab, calibration)

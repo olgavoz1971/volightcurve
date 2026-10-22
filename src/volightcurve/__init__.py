@@ -42,6 +42,13 @@ from .io_keywords import (
     parse_keyword_assignment,
 )
 from .lightcurve import *
+from .interpretation import apply_non_votable_heuristics
+from .suggestions import (
+    SUGGESTION_REASONS,
+    suggested_calibration,
+    suggested_time_system,
+    suggestions_for_missing,
+)
 from .photdm import (
     AsinhZeroPoint,
     LinearFluxZeroPoint,
@@ -52,6 +59,8 @@ from .photdm import (
 from .time_reference import JD_TO_MJD, TIME_OFFSET_ABSOLUTE_JD_THRESHOLD
 from .vo_unit_codec import (
     VO_DIMENSIONLESS_WIRE,
+    UnitReport,
+    inspect_unit_string,
     to_display,
     to_internal,
     to_wire,
@@ -83,7 +92,13 @@ __all__ = [
     "is_magnitude_phot_column",
     "assign_photometry_column_semantics",
     "apply_non_votable_heuristics",
+    "SUGGESTION_REASONS",
+    "suggested_calibration",
+    "suggested_time_system",
+    "suggestions_for_missing",
     "VO_DIMENSIONLESS_WIRE",
+    "UnitReport",
+    "inspect_unit_string",
     "to_internal",
     "to_wire",
     "to_display",

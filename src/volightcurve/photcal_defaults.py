@@ -1,4 +1,9 @@
-"""Optional photometric calibration defaults for host applications.
+"""DEPRECATED: use ``volightcurve.suggestions`` (kept for one release for the host).
+
+The suggestion table has the agreed values (reference magnitude 0, not 20.0) and a reason
+for each; the host moves to it under Ticket 34.
+
+Optional photometric calibration defaults for host applications.
 
 These constants are available when an application deliberately fills an
 incomplete PhotCal pair. Library writers must not apply them on export.

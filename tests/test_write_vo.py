@@ -146,6 +146,9 @@ def test_write_vo_lightcurve_defaults_time_epoch_and_links_written_timesys():
         table_data=t,
         table_name="t",
         filter_identifier="TESS/TESS.Red",
+        refposition="BARYCENTER",
+        timescale="TDB",
+        timeorigin=2400000.5,
         epoch=59000.0,
         binary=False,
     )
