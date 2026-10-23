@@ -55,3 +55,34 @@ def gaia_style_votable(*, include_epoch: bool = True, second_time_col: bool = Fa
   </RESOURCE>
 </VOTABLE>
 """.encode()
+
+
+def annotate_vo_roles(table):
+    """Gives a bare test table the UCDs the writer now requires (it never guesses roles).
+
+    Time columns named ``obs_time``, ``time``, ``jd`` or ``mjd`` get ``time.epoch``;
+    ``phot`` and ``mag`` get ``phot.mag``; ``flux`` gets ``phot.flux``; ``flux_error``
+    and ``mag_err`` get the matching error UCD. A column that already has a UCD is
+    left alone.
+
+    Args:
+        table (astropy.table.Table): Table built by a test.
+
+    Returns:
+        astropy.table.Table: The same table, annotated in place.
+    """
+    ucds = {
+        "obs_time": "time.epoch",
+        "time": "time.epoch",
+        "jd": "time.epoch",
+        "mjd": "time.epoch",
+        "phot": "phot.mag",
+        "mag": "phot.mag",
+        "flux": "phot.flux;em.opt",
+        "mag_err": "stat.error;phot.mag",
+        "flux_error": "stat.error;phot.mag",
+    }
+    for name in table.colnames:
+        if name in ucds and not (table[name].info.meta or {}).get("ucd"):
+            table[name].info.meta = {**(table[name].info.meta or {}), "ucd": ucds[name]}
+    return table

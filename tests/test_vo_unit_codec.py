@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 
 import numpy as np
+from fixtures_votable import annotate_vo_roles
 from astropy.table import Table
 from astropy import units as u
 
@@ -55,7 +56,7 @@ def test_write_vo_dimensionless_zp_uses_empty_unit_attribute():
     buf = io.BytesIO()
     write_vo_lightcurve(
         output_stream_or_path=buf,
-        table_data=t,
+        table_data=annotate_vo_roles(t),
         table_name="Unitless ZP test",
         filter_identifier="TESS/TESS.Red",
         zero_point_flux=1.0,
@@ -77,3 +78,12 @@ def test_write_vo_dimensionless_zp_uses_empty_unit_attribute():
     assert photdm is not None and photdm.photcal is not None
     assert photdm.photcal._zp_flux_unit_text is None
     assert not photdm.photcal._zp_flux_unit_unparsed
+
+
+def test_double_star_power_is_valid_and_single_star_is_not():
+    """``s**-1`` is a VOUnits 1.1 power; ``m*s`` still uses a wrong product sign."""
+    from volightcurve.vo_unit_codec import inspect_unit_string
+
+    assert inspect_unit_string("s**-1").ok
+    assert inspect_unit_string("m**2").ok
+    assert not inspect_unit_string("m*s").ok

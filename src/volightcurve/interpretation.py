@@ -22,13 +22,42 @@ from volightcurve.lightcurve import (
     PhotDM,
     PhotometryFilter,
     assign_label_column_ucd,
-    is_magnitude_phot_column,
 )
 
 if TYPE_CHECKING:
+    from astropy.table import Table
+
     from volightcurve.lightcurve import VOLightCurve
 
 logger = logging.getLogger(__name__)
+
+# Part B: everything here guesses from names, comments or conventions. Underscore names
+# are internal.
+__all__ = [
+    "apply_non_votable_heuristics",
+    "is_magnitude_phot_column",
+    "add_interpretation_note",
+    "interpretation_sentences",
+]
+
+
+_INTERPRETATION_SENTENCE = re.compile(
+    r"Interpreted from the file, not declared in it \([^)]*\): .*?\.(?= Interpreted from the file|\s*$)",
+    re.DOTALL,
+)
+
+
+def interpretation_sentences(description: str | None) -> list[str]:
+    """Extracts the interpretation sentences from a table description.
+
+    Args:
+        description (str, optional): Table description, possibly with source text before
+            the sentences.
+
+    Returns:
+        list[str]: The sentences written by ``add_interpretation_note``, in order.
+    """
+    return _INTERPRETATION_SENTENCE.findall(str(description or ""))
 
 
 def add_interpretation_note(table, how: str, items: list[str]) -> None:
@@ -53,6 +82,42 @@ def add_interpretation_note(table, how: str, items: list[str]) -> None:
     if sentence in current:
         return
     table.meta["description"] = f"{current} {sentence}".strip()
+
+
+def is_magnitude_phot_column(table: "Table", colname: str = "phot") -> bool:
+    """Detects whether a ``phot`` column holds magnitudes rather than flux.
+
+    Uses column unit and UCD metadata following VO photometry conventions.
+    When unit and UCD are both absent (ambiguous non-VO ``phot``), defaults to
+    **magnitude** (a guess, recorded by the caller in the table description).
+
+    Args:
+        table (astropy.table.Table): Source table.
+        colname (str): Photometry column name.
+
+    Returns:
+        bool: True when the column represents magnitudes.
+    """
+    if colname not in table.colnames:
+        return False
+    col = table[colname]
+    if col.unit is not None:
+        try:
+            if col.unit.is_equivalent(u.mag):
+                col.unit.to(u.mag)
+                return True
+        except (u.UnitsError, u.UnitTypeError, TypeError, ValueError):
+            pass
+    ucd = (col.info.meta or {}).get("ucd", "")
+    if "phot.mag" in ucd:
+        return True
+    if "phot.flux" in ucd:
+        return False
+    # Non-magnitude unit present (e.g. Jy) ⇒ flux.
+    if col.unit is not None:
+        return False
+    # Ambiguous bare ``phot`` (no unit, no UCD) ⇒ magnitude.
+    return True
 
 
 def _promote_to_vo_standards(table):

@@ -31,6 +31,36 @@ from volightcurve.photdm import (
 
 logger = logging.getLogger(__name__)
 
+# The strict core: what a file declares. Interpretation (guesses from names, comments or
+# conventions) lives in ``volightcurve.interpretation`` and is not listed here.
+__all__ = [
+    "VOLightCurve",
+    "PhotCal",
+    "PhotDM",
+    "PhotometryFilter",
+    "CooSys",
+    "TimeSys",
+    "extract_photdm",
+    "extract_timesys",
+    "extract_coosys",
+    "write_vo_lightcurve",
+    "find_columns_by_ucd",
+    "get_time_colnames",
+    "get_mag_colnames",
+    "get_flux_colnames",
+    "get_error_colnames",
+    "get_label_colnames",
+    "is_mag_column",
+    "is_flux_column",
+    "column_main_role",
+    "assign_label_column_ucd",
+    "assign_photometry_column_semantics",
+    "print_col_ucd",
+    "DEFAULT_TIME_EPOCH_UCD",
+    "DEFAULT_LABEL_UCD",
+    "LABEL_UCD_FRAGMENTS",
+]
+
 
 class PhotometryFilter:
     """Represents a photometric filter with its identifier and physical spectral location.
@@ -770,6 +800,56 @@ def _read_votable_payload(file_path) -> bytes:
         return handle.read()
 
 
+def _clean_text(value) -> str | None:
+    """Returns stripped text, or ``None`` when the value is empty.
+
+    Args:
+        value (object): A description or INFO text.
+
+    Returns:
+        str or None: The stripped text, ``None`` for ``None`` or blank input.
+    """
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _declared_infos(astro_tree, selected_table) -> list[dict]:
+    """Lists the INFO elements that apply to the selected table, in file order.
+
+    Collects the INFOs of the VOTABLE root, of the RESOURCE that holds the table and of
+    the table itself. Nothing is dropped or merged, so repeated names (several
+    ``creator`` entries) are all kept.
+
+    Args:
+        astro_tree (astropy.io.votable.tree.VOTableFile): Parsed VOTable.
+        selected_table (astropy.io.votable.tree.TableElement): The table in use.
+
+    Returns:
+        list[dict]: One dict per INFO with ``name`` and ``value`` and, when declared,
+            ``ID``, ``ucd``, ``utype``, ``unit``, ``xtype``, ``ref`` and ``content``.
+    """
+    holders = [astro_tree]
+    for resource in astro_tree.resources:
+        if any(table is selected_table for table in resource.tables):
+            holders.append(resource)
+    holders.append(selected_table)
+    found: list[dict] = []
+    for holder in holders:
+        for info in getattr(holder, "infos", []) or []:
+            entry = {"name": info.name, "value": info.value}
+            for attribute in ("ID", "ucd", "utype", "unit", "xtype", "ref"):
+                text = getattr(info, attribute, None)
+                if text:
+                    entry[attribute] = str(text)
+            content = _clean_text(getattr(info, "content", None))
+            if content:
+                entry["content"] = content
+            found.append(entry)
+    return found
+
+
 def _gavo_votable_metadata_tree(payload: bytes):
     """Builds a GAVO ``VOTABLE`` tree for metadata walkers without row decode.
 
@@ -894,26 +974,7 @@ def get_time_colnames(table):
     return find_columns_by_ucd(table, 'time.epoch')
 
 
-# Exact names used when a TIME-role column has no UCD yet (same list as
-# ``resolve_observation_timesys``). Not a substring match.
-OBSERVATION_TIME_NAME_FALLBACKS = ("obs_time", "time", "jd", "mjd")
 DEFAULT_TIME_EPOCH_UCD = "time.epoch"
-
-
-def is_observation_time_column(name: str, ucd: str = "") -> bool:
-    """True when a FIELD is observation time (UCD or TIME-role name).
-
-    Args:
-        name (str): Column / FIELD name.
-        ucd (str): Existing UCD, possibly empty.
-
-    Returns:
-        bool: True when ``time.epoch`` is in ``ucd``, or ``name`` is a TIME-role
-        fallback (``obs_time``, ``time``, ``jd``, ``mjd``).
-    """
-    if DEFAULT_TIME_EPOCH_UCD in (ucd or ""):
-        return True
-    return name in OBSERVATION_TIME_NAME_FALLBACKS
 
 
 def get_mag_colnames(table):
@@ -1113,65 +1174,30 @@ def get_error_colnames(table, base_ucd=None):
     return errors
 
 
-def is_magnitude_phot_column(table: Table, colname: str = "phot") -> bool:
-    """Detects whether a ``phot`` column holds magnitudes rather than flux.
-
-    Uses column unit and UCD metadata following VO photometry conventions.
-    When unit and UCD are both absent (ambiguous non-VO ``phot``), defaults to
-    **magnitude** (Ticket 8 Phase 2b).
-
-    Args:
-        table (astropy.table.Table): Source table.
-        colname (str): Photometry column name.
-
-    Returns:
-        bool: True when the column represents magnitudes.
-    """
-    if colname not in table.colnames:
-        return False
-    col = table[colname]
-    if col.unit is not None:
-        try:
-            if col.unit.is_equivalent(u.mag):
-                col.unit.to(u.mag)
-                return True
-        except (u.UnitsError, u.UnitTypeError, TypeError, ValueError):
-            pass
-    ucd = (col.info.meta or {}).get("ucd", "")
-    if "phot.mag" in ucd:
-        return True
-    if "phot.flux" in ucd:
-        return False
-    # Non-magnitude unit present (e.g. Jy) ⇒ flux.
-    if col.unit is not None:
-        return False
-    # Ambiguous bare ``phot`` (no unit, no UCD) ⇒ magnitude.
-    return True
-
-
 def assign_photometry_column_semantics(
     table: Table,
-    phot_col: str = "phot",
-    error_col: str | None = "flux_error",
+    phot_col: str,
+    error_col: str | None,
     *,
-    force_magnitude: bool | None = None,
+    force_magnitude: bool,
 ) -> Table:
-    """Assigns VO UCD metadata to generic ``phot`` and error columns.
+    """Assigns VO UCD metadata to a photometry column and its error column.
+
+    The caller states whether the column holds magnitudes; nothing is guessed here.
 
     Args:
         table (astropy.table.Table): Export or upload table to annotate.
         phot_col (str): Primary photometry column name.
         error_col (str, optional): Uncertainty column name.
-        force_magnitude (bool, optional): Override automatic domain detection.
+        force_magnitude (bool): ``True`` for magnitudes, ``False`` for flux.
 
     Returns:
         astropy.table.Table: The same table with UCD metadata updated in place.
     """
     if phot_col not in table.colnames:
         return table
-    is_mag = force_magnitude if force_magnitude is not None else is_magnitude_phot_column(table, phot_col)
-    phot_ucd = "phot.mag" if is_mag else "phot.flux;em.opt"
-    err_ucd = "stat.error;phot.mag" if is_mag else "stat.error;phot.flux;em.opt"
+    phot_ucd = "phot.mag" if force_magnitude else "phot.flux;em.opt"
+    err_ucd = "stat.error;phot.mag" if force_magnitude else "stat.error;phot.flux;em.opt"
     if table[phot_col].info.meta is None:
         table[phot_col].info.meta = {}
     table[phot_col].info.meta["ucd"] = phot_ucd
@@ -1180,33 +1206,6 @@ def assign_photometry_column_semantics(
             table[error_col].info.meta = {}
         table[error_col].info.meta["ucd"] = err_ucd
     return table
-
-
-def resolve_votable_phot_field_labels(table: Table, phot_col: str = "phot", error_col: str = "flux_error") -> dict:
-    """Returns VOTable field UCDs and descriptions for a ``phot`` column.
-
-    Args:
-        table (astropy.table.Table): Export table containing ``phot``.
-        phot_col (str): Photometry column name.
-        error_col (str): Uncertainty column name.
-
-    Returns:
-        dict: Keys ``phot_ucd``, ``error_ucd``, ``phot_description``, ``error_description``.
-    """
-    is_mag = is_magnitude_phot_column(table, phot_col)
-    if is_mag:
-        return {
-            "phot_ucd": "phot.mag",
-            "error_ucd": "stat.error;phot.mag",
-            "phot_description": "Photometry (magnitude)",
-            "error_description": "Statistical uncertainty of magnitude",
-        }
-    return {
-        "phot_ucd": "phot.flux;em.opt",
-        "error_ucd": "stat.error;phot.flux;em.opt",
-        "phot_description": "Photometry (flux)",
-        "error_description": "Statistical uncertainty of flux",
-    }
 
 
 def _unit_text_for_check(unit) -> str:
@@ -1262,6 +1261,8 @@ class VOLightCurve:
         self.param_timesys_ref: dict[str, str | None] = {}
         self.coosys = None
         self.photdms = {}  # maps column_name -> PhotDM instance
+        self.votable_description: str | None = None  # VOTABLE-level DESCRIPTION
+        self.infos: list[dict] = []  # INFO elements as the file declared them
         self._table_id = table_id
 
         self._ingest(file_path, table_id=table_id)
@@ -1306,6 +1307,8 @@ class VOLightCurve:
         for param in selected_table.params:
             if param.name:
                 self.table.meta[param.name] = param.value
+        self.votable_description = _clean_text(astro_tree.description)
+        self.infos = _declared_infos(astro_tree, selected_table)
 
         gavo_tree = _gavo_votable_metadata_tree(payload)
         _apply_gavo_votable_metadata(self, gavo_tree)
@@ -1355,6 +1358,8 @@ class VOLightCurve:
         instance.param_timesys_ref = {}
         instance.coosys = None
         instance.photdms = {}
+        instance.votable_description = None
+        instance.infos = []
         instance._table_id = None
         instance.strict = False
         from volightcurve.interpretation import apply_non_votable_heuristics
@@ -1979,6 +1984,7 @@ def write_vo_lightcurve(
     facility_name: str | None = None,
     instrument_name: str | None = None,
     photdms: dict | None = None,
+    infos: list[dict] | None = None,
 ):
     """Writes a lightcurve to a compliant IVOA VOTable (v1.4) XML file/stream.
 
@@ -2028,6 +2034,9 @@ def write_vo_lightcurve(
         effective_wavelength (float, optional): DEPRECATED. Effective wavelength value.
         effective_wavelength_unit (str, optional): DEPRECATED. Unit of effectiveWavelength.
         table_description (str, optional): Table block description. Defaults to None.
+        infos (list[dict], optional): INFO elements to write on the RESOURCE, each a dict
+            with ``name`` and ``value`` and optionally ``ID``, ``ucd``, ``utype``, ``unit``,
+            ``xtype``, ``ref`` and ``content``. Written as given, repeated names included.
         ra (float, optional): RA of target in degrees. Defaults to None.
         dec (float, optional): Dec of target in degrees. Defaults to None.
         filter_name (str, optional): DEPRECATED (use ``photdms``). Human-readable filter
@@ -2084,6 +2093,15 @@ def write_vo_lightcurve(
     tab.name = table_name
     if table_description:
         tab.description = table_description
+
+    for entry in infos or []:
+        info = Info(name=entry["name"], value=entry["value"])
+        for attribute in ("ID", "ucd", "utype", "unit", "xtype", "ref"):
+            if entry.get(attribute):
+                setattr(info, attribute, entry[attribute])
+        if entry.get("content"):
+            info.content = entry["content"]
+        res.infos.append(info)
 
     # Add creator info if provided
     if creator:
@@ -2143,18 +2161,15 @@ def write_vo_lightcurve(
     # Preserve column UCDs. Link TIME-role fields to the TIMESYS we just wrote.
     phot_field_ids: list[str] = []
     error_field_ids: list[str] = []
+    time_field_ids: list[str] = []
     for f in tab.fields:
         f.ID = f.name
         col = t_out[f.name]
         ucd = ""
         if col.info.meta:
             ucd = str(col.info.meta.get("ucd") or "")
-        if is_observation_time_column(f.name, ucd):
-            if not ucd:
-                ucd = DEFAULT_TIME_EPOCH_UCD
-                if col.info.meta is None:
-                    col.info.meta = {}
-                col.info.meta["ucd"] = ucd
+        if DEFAULT_TIME_EPOCH_UCD in ucd:
+            time_field_ids.append(f.name)
             f.ucd = ucd
             if timesys_id:
                 f.ref = timesys_id
@@ -2165,10 +2180,14 @@ def write_vo_lightcurve(
                 error_field_ids.append(f.name)
             else:
                 phot_field_ids.append(f.name)
-    if not phot_field_ids:
-        for name in t_out.colnames:
-            if name in ("phot", "mag", "flux"):
-                phot_field_ids.append(name)
+
+    if not time_field_ids or not phot_field_ids:
+        raise ValueError(
+            "The table has no column with a time UCD (time.epoch) or no photometry "
+            "column with a phot.mag or phot.flux UCD. The writer does not guess roles "
+            "from column names; build the product with VOLightCurve.from_table or "
+            "assign the UCDs first."
+        )
 
     if photdms is None:
         # Deprecated flat route: one calibration for every photometry column.
@@ -2355,6 +2374,7 @@ _MOVED_TO_INTERPRETATION = frozenset(
         "_recover_lc_colnames",
         "apply_non_votable_heuristics",
         "_mag0_declared_in_comments",
+        "is_magnitude_phot_column",
     }
 )
 

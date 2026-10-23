@@ -190,16 +190,15 @@ def resolve_observation_timesys(volc: VOLightCurve) -> "TimeSys":
 
     time_cols = get_time_colnames(volc.table)
     if not time_cols:
-        for fallback in ("obs_time", "time", "jd", "mjd"):
-            if fallback in volc.table.colnames:
-                time_cols = [fallback]
-                break
-    if not time_cols:
-        raise ValueError("No observation time column found for TIMESYS resolution.")
+        raise ValueError(
+            "No observation time column (UCD time.epoch) found for TIMESYS resolution."
+        )
 
     registry = getattr(volc, "timesys_by_id", None) or {}
     field_refs = getattr(volc, "field_timesys_ref", None) or {}
-    default_ts = volc.timesys or TimeSys()
+    default_ts = volc.timesys
+    if default_ts is None:
+        raise ValueError("The lightcurve has no TIMESYS object to resolve time systems from.")
     resolved: list[TimeSys] = []
 
     for col in time_cols:

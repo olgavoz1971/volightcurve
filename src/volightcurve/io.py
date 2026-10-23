@@ -268,11 +268,11 @@ def table_with_non_vo_column_names(table: Table) -> Table:
 
 
 def _comments_with_description(meta) -> list[str]:
-    """Returns the free comments followed by the table description, one line each.
+    """Returns the free comments followed by the interpretation sentences.
 
-    The description carries the sentences that say what interpretation did, so the
-    text formats keep them as comment lines. A description already present among
-    the comments is not repeated.
+    The text formats stay concise: the source description is not copied into them. Only
+    the sentences that say what interpretation did are kept, so a reader of the text file
+    still learns what was guessed. A sentence already among the comments is not repeated.
 
     Args:
         meta (dict or None): Table ``meta``.
@@ -280,12 +280,13 @@ def _comments_with_description(meta) -> list[str]:
     Returns:
         list[str]: Comment lines without a leading ``#``.
     """
+    from volightcurve.interpretation import interpretation_sentences
+
     meta = meta or {}
     comments = list(free_text_comments(meta.get("comments")))
-    description = str(meta.get("description") or "").strip()
-    for line in description.splitlines():
-        if line.strip() and line.strip() not in comments:
-            comments.append(line.strip())
+    for sentence in interpretation_sentences(meta.get("description")):
+        if sentence not in comments:
+            comments.append(sentence)
     return comments
 
 
@@ -536,11 +537,11 @@ def _votable_kwargs_from_volc(
     envelope = dict(meta.get("vo_envelope") or {})
     comments = narrative_file_comments(meta.get("comments"))
     parts = ([str(meta["description"]).strip()] if meta.get("description") else []) + comments
-    description = (
-        envelope.get("votable_description")
-        or envelope.get("table_description")
-        or (" ".join(p for p in parts if p) or None)
+    table_description = envelope.get("table_description") or (
+        " ".join(p for p in parts if p) or None
     )
+    votable_description = envelope.get("votable_description") or volc.votable_description
+    infos = envelope.get("infos") or volc.infos
     table_name = (
         envelope.get("table_name")
         or meta.get("name")
@@ -568,12 +569,13 @@ def _votable_kwargs_from_volc(
     elif volc.timesys is not None and volc.timesys.timescale:
         kwargs["timescale"] = str(volc.timesys.timescale).upper()
 
-    if description:
-        kwargs["votable_description"] = description
-        kwargs["table_description"] = (
-            envelope.get("table_description") or description
-        )
-    if envelope.get("creator"):
+    if votable_description:
+        kwargs["votable_description"] = votable_description
+    if table_description:
+        kwargs["table_description"] = table_description
+    if infos:
+        kwargs["infos"] = list(infos)
+    if envelope.get("creator") and not any(i.get("name") == "creator" for i in infos or []):
         kwargs["creator"] = str(envelope["creator"])
     if meta.get("ra") is not None:
         kwargs["ra"] = meta["ra"]

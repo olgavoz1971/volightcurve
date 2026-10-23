@@ -7,6 +7,8 @@ successfully ingested back into a `VOLightCurve` instance.
 
 import io
 import numpy as np
+from fixtures_votable import annotate_vo_roles
+import pytest
 from astropy.table import Table
 from volightcurve import VOLightCurve, write_vo_lightcurve
 
@@ -23,7 +25,7 @@ def test_volightcurve_write():
     buf = io.BytesIO()
     write_vo_lightcurve(
         output_stream_or_path=buf,
-        table_data=t,
+        table_data=annotate_vo_roles(t),
         table_name="Test Sim Source",
         filter_identifier="TESS/TESS.Red",
         votable_description="Simulated test lightcurve",
@@ -135,11 +137,21 @@ def test_votable_write_preserves_existing_time_ucd_through_jd_shift():
     assert f'ref="{_timesys_id(xml)}"' in jd_field
 
 
-def test_write_vo_lightcurve_defaults_time_epoch_and_links_written_timesys():
-    """Bare TIME-role column gets ``time.epoch``; ``ref`` is the written TIMESYS ID."""
+def test_write_vo_lightcurve_rejects_a_table_without_role_ucds():
+    """The writer does not guess roles from names: a bare table is rejected."""
     t = Table()
     t["obs_time"] = np.array([59000.1, 59000.2])
     t["phot"] = np.array([12.5, 12.6])
+    with pytest.raises(ValueError, match="does not guess roles"):
+        write_vo_lightcurve(output_stream_or_path=io.BytesIO(), table_data=t, table_name="t")
+
+
+def test_write_vo_lightcurve_links_time_epoch_to_the_written_timesys():
+    """A TIME-role column carries ``time.epoch`` and ``ref`` is the written TIMESYS ID."""
+    t = Table()
+    t["obs_time"] = np.array([59000.1, 59000.2])
+    t["phot"] = np.array([12.5, 12.6])
+    t = annotate_vo_roles(t)
     buf = io.BytesIO()
     write_vo_lightcurve(
         output_stream_or_path=buf,

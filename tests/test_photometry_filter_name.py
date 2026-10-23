@@ -6,6 +6,7 @@ import io
 
 import numpy as np
 from astropy.table import Table
+from fixtures_votable import annotate_vo_roles
 
 from volightcurve import VOLightCurve, write_vo_lightcurve
 
@@ -22,7 +23,7 @@ def test_votable_photcal_group_writes_filter_name_utype():
     buf = io.BytesIO()
     write_vo_lightcurve(
         output_stream_or_path=buf,
-        table_data=table,
+        table_data=annotate_vo_roles(table),
         table_name="Filter name test",
         filter_identifier="Generic/Bessell.I",
         filter_name="I",
@@ -53,7 +54,7 @@ def test_votable_photcal_filter_name_roundtrip():
     buf = io.BytesIO()
     write_vo_lightcurve(
         output_stream_or_path=buf,
-        table_data=table,
+        table_data=annotate_vo_roles(table),
         table_name="Roundtrip",
         filter_identifier="Generic/Bessell.I",
         filter_name="I",

@@ -208,7 +208,8 @@ def inspect_unit_string(value: str | None) -> UnitReport:
         report.errors.append(
             "whitespace is not allowed in a VOUnits 1.1 unit string; the product sign is '.'"
         )
-    if "*" in text:
+    # "**" is the VOUnits 1.1 power operator (s**-1); only a lone "*" is a product sign.
+    if "*" in text.replace("**", ""):
         report.errors.append("'*' is not a product sign in VOUnits 1.1; use '.'")
     if report.errors:
         return report

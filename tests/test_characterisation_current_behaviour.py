@@ -42,6 +42,7 @@ from volightcurve.time_reference import (
     time_offset_to_absolute_jd,
 )
 from volightcurve.lightcurve import _gavo_votable_tree_from_source
+from fixtures_votable import annotate_vo_roles
 
 logger = logging.getLogger(__name__)
 
@@ -110,7 +111,7 @@ def _write_bytes(table: Table, **kwargs) -> bytes:
         bytes: VOTable document.
     """
     buffer = io.BytesIO()
-    write_vo_lightcurve(buffer, table, table_name="characterisation", **kwargs)
+    write_vo_lightcurve(buffer, annotate_vo_roles(table), table_name="characterisation", **kwargs)
     return buffer.getvalue()
 
 
@@ -531,6 +532,7 @@ def _two_flux_table() -> Table:
     """
     table = Table()
     table["obs_time"] = np.array([1.0, 2.0])
+    table["obs_time"].info.meta = {"ucd": "time.epoch"}
     for name in ("sap_flux", "pdcsap_flux"):
         table[name] = np.array([1.0, 1.1])
         table[name].info.meta = {"ucd": "phot.flux;em.opt"}
@@ -849,6 +851,7 @@ def test_core_import_does_not_need_gavo():
         "from astropy.table import Table\n"
         "import numpy as np, io\n"
         "t = Table(); t['obs_time'] = np.array([1.0]); t['phot'] = np.array([2.0])\n"
+        "t['obs_time'].info.meta = {'ucd': 'time.epoch'}; t['phot'].info.meta = {'ucd': 'phot.mag'}\n"
         "volightcurve.write_vo_lightcurve(io.BytesIO(), t, table_name='x')\n"
         "print('ok')\n"
     )
@@ -968,3 +971,73 @@ def test_described_sentences_survive_next_to_narrative_comments_in_every_format(
         text = out.decode() if isinstance(out, bytes) else out
         assert "Interpreted from the file, not declared in it" in text, fmt
         assert "Observed at Site X." in text, fmt
+
+
+# ---------------------------------------------------------------------------
+# Step 6: VOTABLE description and INFO elements are read and written back
+# ---------------------------------------------------------------------------
+
+_OGLE_FULL = Path(__file__).parent / "data" / "ogle_lmc_rrlyr_13820_full.vot"
+
+
+def _infos_named(volc, name):
+    """Returns the values of every INFO called ``name``.
+
+    Args:
+        volc (VOLightCurve): Product to look at.
+        name (str): INFO name.
+
+    Returns:
+        list[str]: Values in file order.
+    """
+    return [entry["value"] for entry in volc.infos if entry["name"] == name]
+
+
+def test_declared_votable_description_and_infos_are_read_separately():
+    """Step 6: the VOTABLE text, the table text and every INFO are kept, none merged."""
+    volc = read_lightcurve(_OGLE_FULL, filename=_OGLE_FULL.name)
+    assert volc.votable_description.startswith("The **Optical Gravitational Lensing Experiment")
+    assert volc.table.meta["description"] == "The OGLE lightcurve for OGLE-LMC-RRLYR-13820 in I passband"
+    assert len(_infos_named(volc, "creator")) == 19
+    assert _infos_named(volc, "legal")
+    assert _infos_named(volc, "rights")
+    assert _infos_named(volc, "publisher")
+
+
+def test_votable_round_trip_keeps_both_descriptions_and_every_info():
+    """Step 6: a VOTable written from a VOTable read loses neither description nor INFO."""
+    from volightcurve.io import write_lightcurve
+
+    volc = read_lightcurve(_OGLE_FULL, filename=_OGLE_FULL.name)
+    again = read_lightcurve(io.BytesIO(write_lightcurve(volc, "votable")), filename="x.vot")
+    # The XML writer re-wraps long text (even after a hyphen), so compare without whitespace.
+    assert "".join(again.votable_description.split()) == "".join(volc.votable_description.split())
+    assert again.table.meta["description"] == volc.table.meta["description"]
+    assert _infos_named(again, "creator") == _infos_named(volc, "creator")
+    assert _infos_named(again, "legal") == _infos_named(volc, "legal")
+
+
+def test_text_formats_carry_no_info_elements():
+    """Step 6: ECSV, DAT and CSV stay concise, with no INFO or VOTABLE text."""
+    from volightcurve.io import write_lightcurve
+
+    volc = read_lightcurve(_OGLE_FULL, filename=_OGLE_FULL.name)
+    for fmt in ("dat", "csv", "ecsv"):
+        out = write_lightcurve(volc, fmt)
+        text = out.decode() if isinstance(out, bytes) else out
+        assert "Optical Gravitational" not in text, fmt
+        assert "legal" not in text.lower(), fmt
+
+
+def test_text_formats_keep_only_the_interpretation_sentences():
+    """Step 6b: the source description is not copied into dat, csv or ecsv; the sentences are."""
+    from volightcurve.io import write_lightcurve
+
+    table = _dat_table_with_comments()
+    volc = VOLightCurve.from_table(table)
+    volc.table.meta["description"] = "Long source text. " + volc.table.meta["description"]
+    for fmt in ("dat", "csv", "ecsv"):
+        out = write_lightcurve(volc, fmt)
+        text = out.decode() if isinstance(out, bytes) else out
+        assert "Long source text" not in text, fmt
+        assert "Interpreted from the file, not declared in it" in text, fmt
