@@ -270,8 +270,10 @@ pytest -q
 
 ## Dependencies
 
-- ``numpy``, ``astropy``, ``pyOpenSSL`` (required by GAVO at import)
-- GAVO VOTable utilities (``gavoutils`` / ``gavostc`` / ``gavovot`` tarballs)
+- Core (writing a VOTable): ``numpy``, ``astropy``.
+- Reading a VOTable (``pip install volightcurve[read]``): ``pyOpenSSL`` (required by GAVO at
+  import) and the GAVO VOTable utilities (``gavoutils`` / ``gavostc`` / ``gavovot`` tarballs).
+  Without them ``read_lightcurve`` raises an ``ImportError`` that says so.
 
 Optional for the example plots: ``matplotlib``.
 

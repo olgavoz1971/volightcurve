@@ -13,6 +13,11 @@ authors = [{ name = "Olga Vozyakova", email = "olgavoz@gmail.com"}]
 dependencies = [
     "numpy",
     "astropy",
+]
+
+[project.optional-dependencies]
+# Reading a VOTable (``read_lightcurve``) needs the GAVO VOTable stack. Writing does not.
+read = [
     # GAVO imports OpenSSL at package load (gavo.utils.monkeypatch).
     "pyOpenSSL",
     # GAVO VOTable stack:
@@ -20,9 +25,7 @@ dependencies = [
     "gavostc @ https://soft.g-vo.org/dist/gavostc-latest.tar.gz",
     "gavovot @ https://soft.g-vo.org/dist/gavovot-latest.tar.gz",
 ]
-
-[project.optional-dependencies]
-dev = ["pytest", "matplotlib"]
+dev = ["pytest", "matplotlib", "volightcurve[read]"]
 
 [tool.setuptools.packages.find]
 where = ["src"]

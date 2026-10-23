@@ -106,3 +106,23 @@ def test_narrative_comment_survives_dat_round_trip():
     restored = read_lightcurve(io.BytesIO(out.encode("utf-8")), filename="notes.dat")
     comments = restored.table.meta.get("comments") or []
     assert any("Observer notes" in c for c in comments)
+
+
+def test_reading_without_the_gavo_stack_says_how_to_install_it(monkeypatch):
+    """A missing GAVO stack gives an ImportError that names the ``read`` extra."""
+    import builtins
+
+    import pytest
+
+    from volightcurve.lightcurve import _gavo_votable_metadata_tree
+
+    real_import = builtins.__import__
+
+    def _blocked(name, *args, **kwargs):
+        if name.startswith("gavo"):
+            raise ImportError(f"blocked {name}")
+        return real_import(name, *args, **kwargs)
+
+    monkeypatch.setattr(builtins, "__import__", _blocked)
+    with pytest.raises(ImportError, match=r"volightcurve\[read\]"):
+        _gavo_votable_metadata_tree(b"<VOTABLE/>")

@@ -864,10 +864,17 @@ def _gavo_votable_metadata_tree(payload: bytes):
         GAVO ``V.VOTABLE`` root for ``extract_photdm`` / TIMESYS walkers.
 
     Raises:
+        ImportError: When the GAVO VOTable stack is not installed.
         ValueError: When parsing completes without a ``VOTABLE`` root node.
     """
-    from gavo.votable import tableparser, votparse
-    from gavo.votable.model import VOTable as V
+    try:
+        from gavo.votable import tableparser, votparse
+        from gavo.votable.model import VOTable as V
+    except ImportError as exc:
+        raise ImportError(
+            "Reading a VOTable needs the GAVO VOTable stack. Install it with "
+            "'pip install volightcurve[read]'. Writing a VOTable does not need it."
+        ) from exc
 
     votable_node = None
     for element in votparse.parse(io.BytesIO(payload), {V.VOTABLE}):
