@@ -87,3 +87,12 @@ def test_double_star_power_is_valid_and_single_star_is_not():
     assert inspect_unit_string("s**-1").ok
     assert inspect_unit_string("m**2").ok
     assert not inspect_unit_string("m*s").ok
+
+
+def test_scaled_unit_text_is_checked_in_its_wire_form():
+    """A scaled unit such as ``0.1nm`` is clean; Astropy's display ``0.1 nm`` is not what is checked."""
+    from volightcurve.lightcurve import _unit_text_for_check
+    from astropy import units as u
+
+    unit = u.Unit("0.1nm", format="vounit")
+    assert _unit_text_for_check(unit) == "0.1nm"

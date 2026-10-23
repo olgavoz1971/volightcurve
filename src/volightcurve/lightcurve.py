@@ -1505,7 +1505,7 @@ class VOLightCurve:
                     add(f"photcal:{column}:zeroPointReferenceMagnitude", photcal._zp_mag_unit_text)
             spectral = photdm.filter.spectral_location if photdm.filter is not None else None
             if spectral is not None and getattr(spectral, "unit", None) is not None:
-                add(f"photcal:{column}:effectiveWavelength", str(spectral.unit))
+                add(f"photcal:{column}:effectiveWavelength", _unit_text_for_check(spectral.unit))
         return findings
 
     def conversion_problems(self, column: str) -> list[str]:
