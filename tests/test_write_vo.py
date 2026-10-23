@@ -6,6 +6,7 @@ successfully ingested back into a `VOLightCurve` instance.
 """
 
 import io
+import re
 import numpy as np
 from fixtures_votable import annotate_vo_roles
 import pytest
@@ -205,3 +206,74 @@ def test_write_votable_method_writes_the_calibration_of_the_instance():
     text = again.getvalue().decode()
     assert re.search(r'name="zeroPointFlux"[^>]*value="3631', text)
     assert 'name="zeroPointReferenceMagnitude"' in text
+
+
+def test_table_params_are_written_as_given_and_duplicates_are_refused():
+    """Generic TABLE PARAMs keep name, datatype, unit, UCD and value; a repeated name fails."""
+    from fixtures_votable import annotate_vo_roles
+
+    table = Table()
+    table["obs_time"] = np.array([59000.1, 59000.2])
+    table["phot"] = np.array([12.5, 12.6])
+    table["phot"].info.meta = {"ucd": "phot.mag;em.opt"}
+    entries = [
+        {"name": "source_id", "value": "10655814178816", "datatype": "long", "ucd": "meta.id"},
+        {"name": "author", "value": "SPOC"},
+        {"name": "exptime", "value": "120.0", "datatype": "double", "unit": "s"},
+    ]
+    out = io.BytesIO()
+    write_vo_lightcurve(
+        out,
+        annotate_vo_roles(table),
+        table_name="t",
+        timeorigin=2400000.5,
+        refposition="BARYCENTER",
+        timescale="TDB",
+        table_params=entries,
+    )
+    text = out.getvalue().decode()
+    assert re.search(r'name="source_id"[^>]*value="10655814178816"', text) or re.search(
+        r'value="10655814178816"[^>]*name="source_id"', text
+    )
+    assert 'name="author"' in text and 'value="SPOC"' in text
+    assert re.search(r'name="exptime"[^>]*unit="s"', text) or re.search(r'unit="s"[^>]*name="exptime"', text)
+    with pytest.raises(ValueError, match="already has a PARAM"):
+        write_vo_lightcurve(
+            io.BytesIO(),
+            annotate_vo_roles(table),
+            table_name="t",
+            ra=1.0,
+            table_params=[{"name": "ra", "value": "2.0", "datatype": "double"}],
+        )
+    with pytest.raises(ValueError, match="needs a 'name' and a 'value'"):
+        write_vo_lightcurve(
+            io.BytesIO(),
+            annotate_vo_roles(table),
+            table_name="t",
+            table_params=[{"name": "x"}],
+        )
+
+
+def test_writer_gives_no_photcal_group_to_a_non_measurement_column():
+    """A signal-to-noise column keeps its UCD but is not linked to any photcal group."""
+    from fixtures_votable import annotate_vo_roles
+    from volightcurve import PhotCal, PhotDM
+
+    table = Table()
+    table["obs_time"] = np.array([59000.1, 59000.2])
+    table["mag"] = np.array([12.5, 12.6])
+    table["mag"].info.meta = {"ucd": "phot.mag;em.opt"}
+    table["snr"] = np.array([50.0, 51.0])
+    table["snr"].info.meta = {"ucd": "stat.snr;phot.flux"}
+    out = io.BytesIO()
+    write_vo_lightcurve(
+        out,
+        annotate_vo_roles(table),
+        table_name="t",
+        timeorigin=2400000.5,
+        photdms={"mag": PhotDM(photcal=PhotCal(zp_mag=0.0, zp_flux=3631.0, zp_flux_unit="Jy"))},
+    )
+    text = out.getvalue().decode()
+    assert text.count("<GROUP ") == 1
+    assert re.findall(r'<FIELDref ref="([^"]+)"', text) == ["mag"]
+    assert 'ucd="stat.snr;phot.flux"' in text

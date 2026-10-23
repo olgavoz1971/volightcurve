@@ -1267,6 +1267,39 @@ def _unit_text_for_check(unit) -> str:
         return str(unit)
 
 
+def _force_vounits_on_wire(vot_file) -> None:
+    """Makes every FIELD and PARAM unit be written as VOUnits text.
+
+    WORKAROUND for old Astropy. Up to the 6.x/7.x series (6.1.7 here) Astropy writes
+    FIELD and PARAM units with its CDS formatter (``count/s`` becomes ``ct.s-1``), with no
+    option to change that. Astropy 8.0 and later write VOUnits instead, but they need
+    Python 3.11 or newer; the development machine has 3.11, the production server does
+    not. Remove this function once the production server can run Astropy 8.0 or later.
+
+    Each recognised unit is therefore replaced
+    by an unrecognised-unit object that carries its VOUnits text, which Astropy
+    writes as given. Unrecognised units already carry their own text and are kept.
+    A unit that VOUnits cannot express is left to Astropy.
+    Dimensionless units are left to ``rewrite_astropy_empty_unit_attributes``.
+
+    Args:
+        vot_file (astropy.io.votable.tree.VOTableFile): File about to be serialised.
+    """
+    for element in vot_file.iter_fields_and_params():
+        unit = element.unit
+        if unit is None or isinstance(unit, u.UnrecognizedUnit):
+            continue
+        if unit == u.dimensionless_unscaled:
+            continue
+        try:
+            text = unit.to_string("vounit")
+        except (ValueError, u.UnitsError):
+            # VOUnits cannot express this unit (for example electron): Astropy writes
+            # it as it did before; the unit check reports it on reading.
+            continue
+        element._unit = u.UnrecognizedUnit(text)
+
+
 class VOLightCurve:
     """Represents a Virtual Observatory (VO) lightcurve container.
 
@@ -1957,11 +1990,13 @@ def _append_photcal_group(vot_file, res, tab, group_id: str, params: dict, colum
 
     def add(name, value, datatype, utype, ucd, unit=None, arraysize=None, description=None):
         kwargs = {"name": name, "value": value, "datatype": datatype}
-        if unit is not None:
-            kwargs["unit"] = unit
         if arraysize is not None:
             kwargs["arraysize"] = arraysize
         param = Param(vot_file, **kwargs)
+        if unit is not None:
+            # Keep the declared text; old Astropy (before 8.0, which needs Python 3.11)
+            # would re-spell it in CDS on writing. See _force_vounits_on_wire.
+            param._unit = u.UnrecognizedUnit(unit)
         param.utype = utype
         param.ucd = ucd
         if description:
@@ -2038,6 +2073,7 @@ def write_vo_lightcurve(
     instrument_name: str | None = None,
     photdms: dict | None = None,
     infos: list[dict] | None = None,
+    table_params: list[dict] | None = None,
 ):
     """Writes a lightcurve to a compliant IVOA VOTable (v1.4) XML file/stream.
 
@@ -2108,6 +2144,11 @@ def write_vo_lightcurve(
             written when ``None`` or empty.
         instrument_name (str, optional): Instrument name TABLE PARAM; not written when
             ``None`` or empty.
+        table_params (list[dict], optional): PARAM elements to write on the TABLE, each a dict
+            with ``name`` and ``value`` and optionally ``datatype`` (default ``char``),
+            ``arraysize`` (default ``*`` for ``char``), ``unit``, ``ucd``, ``utype``, ``ref`` (the
+            ``TIMESYS`` ID, for a time value) and ``description``. Written as given and in
+            this order, after the standard PARAMs of this function.
         photdms (dict, optional): Column name to ``PhotDM``. Columns that share one
             ``PhotDM`` object share one photcal GROUP. Photometry columns that are not
             listed are tied to one shared empty calibration; error columns that are not
@@ -2115,7 +2156,8 @@ def write_vo_lightcurve(
 
     Raises:
         ValueError: When ``photdms`` is combined with the deprecated flat calibration
-            arguments.
+            arguments, or when an entry of ``table_params`` has no ``name`` or ``value`` or
+            repeats the name of a PARAM already written.
     """
     import astropy.io.votable as vot
     from astropy.io.votable.tree import Param, Info, TimeSys, CooSys as VOTableCooSys
@@ -2228,18 +2270,17 @@ def write_vo_lightcurve(
                 f.ref = timesys_id
         elif ucd:
             f.ucd = ucd
-        if ucd and ("phot.mag" in ucd or "phot.flux" in ucd):
+        if ucd and ("phot.mag" in ucd or "phot.flux" in ucd) and is_measurement_ucd(ucd):
             if "stat.error" in ucd:
                 error_field_ids.append(f.name)
             else:
                 phot_field_ids.append(f.name)
 
-    if not time_field_ids or not phot_field_ids:
+    if not time_field_ids:
         raise ValueError(
-            "The table has no column with a time UCD (time.epoch) or no photometry "
-            "column with a phot.mag or phot.flux UCD. The writer does not guess roles "
-            "from column names; build the product with VOLightCurve.from_table or "
-            "assign the UCDs first."
+            "The table has no column with a time UCD (time.epoch). The writer does not "
+            "guess roles from column names; build the product with VOLightCurve.from_table "
+            "or assign the UCDs first."
         )
 
     if photdms is None:
@@ -2332,6 +2373,26 @@ def write_vo_lightcurve(
         p_fac.description = f"Observatory {param_name.replace('_', ' ')}"
         tab.params.append(p_fac)
 
+    for entry in table_params or []:
+        if not entry.get("name") or entry.get("value") is None:
+            raise ValueError("Each table_params entry needs a 'name' and a 'value'.")
+        if any(existing.name == entry["name"] for existing in tab.params):
+            raise ValueError(f"The table already has a PARAM named {entry['name']!r}.")
+        datatype = entry.get("datatype", "char")
+        kwargs = {"name": entry["name"], "value": entry["value"], "datatype": datatype}
+        if entry.get("unit"):
+            kwargs["unit"] = entry["unit"]
+        arraysize = entry.get("arraysize", "*" if datatype == "char" else None)
+        if arraysize:
+            kwargs["arraysize"] = arraysize
+        extra = Param(vot_file, **kwargs)
+        for attribute in ("ucd", "utype", "ref"):
+            if entry.get(attribute):
+                setattr(extra, attribute, entry[attribute])
+        if entry.get("description"):
+            extra.description = entry["description"]
+        tab.params.append(extra)
+
     meta_src = getattr(t, 'meta', None) or {}
     optional_char_params = (
         ('sectors', 'meta.id;meta.dataset', 'TESS sector identifiers present in this lightcurve'),
@@ -2362,6 +2423,8 @@ def write_vo_lightcurve(
     tabledata_format = 'binary' if binary else 'tabledata'
     needs_ampersand_repair = bool(publication_id and "&" in str(publication_id))
     buffer = io.BytesIO()
+    # Workaround for Astropy before 8.0 (CDS unit text); see _force_vounits_on_wire.
+    _force_vounits_on_wire(vot_file)
     vot_file.to_xml(buffer, tabledata_format=tabledata_format)
     payload = rewrite_astropy_empty_unit_attributes(buffer.getvalue())
     if needs_ampersand_repair:
