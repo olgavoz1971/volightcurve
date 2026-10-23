@@ -175,3 +175,33 @@ def test_write_vo_lightcurve_links_time_epoch_to_the_written_timesys():
 
 if __name__ == "__main__":
     test_volightcurve_write()
+
+
+def test_write_votable_method_writes_the_calibration_of_the_instance():
+    """``VOLightCurve.write_votable`` passes the instance ``photdms`` to the writer."""
+    import re
+
+    from fixtures_votable import annotate_vo_roles
+    from volightcurve import PhotCal, PhotDM, read_lightcurve
+
+    table = Table()
+    table["obs_time"] = np.array([59000.1, 59000.2])
+    table["phot"] = np.array([12.5, 12.6])
+    table["phot"].info.meta = {"ucd": "phot.mag;em.opt"}
+    source = io.BytesIO()
+    write_vo_lightcurve(
+        source,
+        annotate_vo_roles(table),
+        table_name="t",
+        photdms={"phot": PhotDM(photcal=PhotCal(zp_mag=0.0, zp_flux=3631.0, zp_flux_unit="Jy"))},
+        refposition="BARYCENTER",
+        timescale="TDB",
+        timeorigin=2400000.5,
+    )
+    source.seek(0)
+    volc = read_lightcurve(source, filename="t.vot", strict=True)
+    again = io.BytesIO()
+    volc.write_votable(again, table_name="t")
+    text = again.getvalue().decode()
+    assert re.search(r'name="zeroPointFlux"[^>]*value="3631', text)
+    assert 'name="zeroPointReferenceMagnitude"' in text

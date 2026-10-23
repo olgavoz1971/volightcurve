@@ -977,6 +977,26 @@ def get_time_colnames(table):
 DEFAULT_TIME_EPOCH_UCD = "time.epoch"
 
 
+# UCD words of a column that describes the measurements without being one: a limit
+# (``stat.max`` / ``stat.min``), a signal-to-noise ratio (``stat.snr``) or a bare ``stat``
+# (a statistic of the flux, such as flux over error). Such a column keeps its photometric UCD
+# words but has no photometric calibration of its own, so it is not a photometry column.
+NON_MEASUREMENT_UCD_WORDS = frozenset({"stat", "stat.max", "stat.min", "stat.snr"})
+
+
+def is_measurement_ucd(ucd: str) -> bool:
+    """Tells whether a UCD describes a measurement, not a statistic about the measurements.
+
+    Args:
+        ucd (str): UCD string of a column, words separated by ``;``.
+
+    Returns:
+        bool: False when the UCD carries a word of ``NON_MEASUREMENT_UCD_WORDS``.
+    """
+    words = {word.strip() for word in ucd.split(";")}
+    return not (words & NON_MEASUREMENT_UCD_WORDS)
+
+
 def get_mag_colnames(table):
     """Retrieves names of columns containing primary magnitudes from the table, excluding error columns.
 
@@ -988,7 +1008,12 @@ def get_mag_colnames(table):
     """
     # Returns primary magnitudes, excludes errors
     all_mags = find_columns_by_ucd(table, 'phot.mag')
-    return [c for c in all_mags if 'stat.error' not in table[c].info.meta.get('ucd', '')]
+    return [
+        c
+        for c in all_mags
+        if 'stat.error' not in table[c].info.meta.get('ucd', '')
+        and is_measurement_ucd(table[c].info.meta.get('ucd', ''))
+    ]
 
 
 def get_flux_colnames(table):
@@ -1001,7 +1026,12 @@ def get_flux_colnames(table):
         list of str: Column names matching flux UCDs (e.g., 'phot.flux') that do not represent errors.
     """
     all_flux = find_columns_by_ucd(table, 'phot.flux')
-    return [c for c in all_flux if 'stat.error' not in table[c].info.meta.get('ucd', '')]
+    return [
+        c
+        for c in all_flux
+        if 'stat.error' not in table[c].info.meta.get('ucd', '')
+        and is_measurement_ucd(table[c].info.meta.get('ucd', ''))
+    ]
 
 
 def is_mag_column(table: Table, colname: str | None):
@@ -1071,6 +1101,8 @@ def column_main_role(table: Table, colname: str) -> str | None:
         return "mag_err"
     if "stat.error" in ucd and "phot.flux" in ucd:
         return "flux_err"
+    if not is_measurement_ucd(ucd):
+        return None
     if "phot.mag" in ucd:
         return "mag"
     if "phot.flux" in ucd:
@@ -1756,6 +1788,20 @@ class VOLightCurve:
             epoch=epoch,
             binary=binary,
         )
+        flat_calibration_given = any(
+            value is not None
+            for value in (
+                filter_identifier,
+                zero_point_flux,
+                zero_point_flux_unit,
+                zero_point_ref_mag,
+                magnitude_system,
+                effective_wavelength,
+                filter_name,
+            )
+        )
+        if not flat_calibration_given:
+            write_kwargs["photdms"] = self.photdms
         if self.coosys is not None:
             write_kwargs.update(
                 coosys_id=self.coosys.coosys_id,
