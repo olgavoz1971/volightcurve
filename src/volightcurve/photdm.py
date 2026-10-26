@@ -20,6 +20,57 @@ from volightcurve.vo_unit_codec import to_internal
 logger = logging.getLogger(__name__)
 
 
+def _unit_text(unit) -> str:
+    """Returns the Astropy text of a unit, the same for any two declarations of it.
+
+    Args:
+        unit (astropy.units.UnitBase): Unit to describe.
+
+    Returns:
+        str: Text used to decide whether two declarations are the same unit; the generic
+            Astropy spelling (``electron / s``), which does not depend on how the unit
+            was written in the file (``electron.s-1``, ``electron/s``).
+    """
+    return str(unit)
+
+
+def _quantity_in_unit(quantity, target, description: str):
+    """Expresses a quantity in the target unit, trusting two identical declarations.
+
+    A unit that VOUnits does not support (for example ``electron``) is parsed into a
+    new, distinct Astropy object each time, so two identical declarations (the FIELD and
+    the zero point) are not equal and ``Quantity.to`` refuses them. When both units have
+    the same Astropy text the values are taken as they are and given the target unit; no factor
+    is assumed. Otherwise Astropy converts, and its refusal is raised with both texts.
+
+    Args:
+        quantity (astropy.units.Quantity): Values to express.
+        target (astropy.units.UnitBase): Unit of the zero point.
+        description (str): Role of the quantity, for the error message.
+
+    Returns:
+        astropy.units.Quantity: Values in the target unit.
+
+    Raises:
+        astropy.units.UnitsError: When the unit is missing, or the units differ and
+            Astropy cannot convert between them.
+    """
+    unit = quantity.unit
+    if unit is None or not unit.is_equivalent(target):
+        raise u.UnitsError(
+            f"{description} unit[{unit}] and zero_point unit[{target}] must match"
+        )
+    if _unit_text(unit) == _unit_text(target):
+        return u.Quantity(quantity.value, target)
+    try:
+        return quantity.to(target)
+    except u.UnitConversionError as exc:
+        raise u.UnitsError(
+            f"{description} unit[{_unit_text(unit)}] cannot be converted to the zero_point "
+            f"unit[{_unit_text(target)}]: {exc}"
+        ) from exc
+
+
 class MagnitudeSystem:
     """photDM:MagnitudeSystem -- catalogue magnitude system label.
 
@@ -186,11 +237,7 @@ class PogsonZeroPoint(ZeroPoint):
         Raises:
             astropy.units.UnitsError: On incompatible magnitude units.
         """
-        if mag.unit is None or not mag.unit.is_equivalent(self._zp_mag.unit):
-            raise u.UnitsError(
-                f"magnitude column unit[{mag.unit}] and zero_point unit[{self._zp_mag.unit}] must match"
-            )
-        mag_zp = mag.to(self._zp_mag.unit)
+        mag_zp = _quantity_in_unit(mag, self._zp_mag.unit, "magnitude column")
         delta_mag = (mag_zp - self._zp_mag).to_value(self._zp_mag.unit)
         return self._zp_flux * 10 ** (-0.4 * delta_mag)
 
@@ -206,11 +253,7 @@ class PogsonZeroPoint(ZeroPoint):
         Raises:
             astropy.units.UnitsError: On incompatible flux units.
         """
-        if flux.unit is None or not flux.unit.is_equivalent(self._zp_flux.unit):
-            raise u.UnitsError(
-                f"flux column unit[{flux.unit}] and zero_point unit[{self._zp_flux.unit}] must match"
-            )
-        flux_zp = flux.to(self._zp_flux.unit)
+        flux_zp = _quantity_in_unit(flux, self._zp_flux.unit, "flux column")
         ratio = (flux_zp / self._zp_flux).to_value(u.dimensionless_unscaled)
         return self._zp_mag - 2.5 * np.log10(ratio) * self._zp_mag.unit
 
@@ -226,11 +269,7 @@ class PogsonZeroPoint(ZeroPoint):
         """
         flux = self.mag_to_flux(mag)
         pogson_slope = 0.4 * np.log(10.0)
-        if mag_err.unit is None or not mag_err.unit.is_equivalent(self._zp_mag.unit):
-            raise u.UnitsError(
-                f"magnitude error unit[{mag_err.unit}] and zero_point unit[{self._zp_mag.unit}] must match"
-            )
-        mag_err_zp = mag_err.to(self._zp_mag.unit)
+        mag_err_zp = _quantity_in_unit(mag_err, self._zp_mag.unit, "magnitude error")
         sigma_m = mag_err_zp.to_value(self._zp_mag.unit)
         return np.abs(flux * pogson_slope * sigma_m)
 
@@ -244,16 +283,8 @@ class PogsonZeroPoint(ZeroPoint):
         Returns:
             Magnitude uncertainty Quantity.
         """
-        if flux.unit is None or not flux.unit.is_equivalent(self._zp_flux.unit):
-            raise u.UnitsError(
-                f"flux column unit[{flux.unit}] and zero_point unit[{self._zp_flux.unit}] must match"
-            )
-        flux_zp = flux.to(self._zp_flux.unit)
-        if flux_err.unit is None or not flux_err.unit.is_equivalent(self._zp_flux.unit):
-            raise u.UnitsError(
-                f"flux error unit[{flux_err.unit}] and zero_point unit[{self._zp_flux.unit}] must match"
-            )
-        err_zp = flux_err.to(self._zp_flux.unit)
+        flux_zp = _quantity_in_unit(flux, self._zp_flux.unit, "flux column")
+        err_zp = _quantity_in_unit(flux_err, self._zp_flux.unit, "flux error")
         ln10 = np.log(10.0)
         ratio = (err_zp / flux_zp).to_value(u.dimensionless_unscaled)
         return (2.5 / ln10) * np.abs(ratio) * self._zp_mag.unit

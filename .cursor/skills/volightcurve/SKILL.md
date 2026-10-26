@@ -97,6 +97,31 @@ This skill folder is self-contained: extra detail lives under
   `flux_error` mean a fixed domain — see
   [references/column_discovery.md](references/column_discovery.md).
 
+## Time and units (read before touching either)
+
+**Time.** The time column holds offsets from the declared `TIMESYS` time origin.
+Get absolute times only with `volc.get_observation_times()` (an `astropy.time.Time`
+in the declared time scale). Read the reference position from
+`volc.timesys.refposition`.
+
+- The source never decides a time shift. Seeing "TESS", "Gaia" or "ZTF" is not a
+  reason to add or subtract BTJD, BJD-2455197.5 or any other mission offset: the
+  products are source agnostic and the origin is declared in the file. A TESS
+  light curve from Discovery is in MJD (`timeorigin` 2400000.5), not BTJD.
+- Never write `jd + 2457000`-style arithmetic. If `time_problems()` is not empty,
+  or `get_observation_times()` raises (no time scale, no origin), stop and report
+  it to the user; do not guess an origin or a scale.
+- Tell the user which time scale, reference position and origin you used.
+
+**Units.** Keep the unit the file declares.
+
+- A unit that VOUnits does not support (for example `electron`) is only a warning.
+  Reading, writing and `PhotCal` conversion work with it when the column and the
+  zero point declare the same unit.
+- If a conversion raises `UnitsError`, report the message and both unit texts to
+  the user. Never strip, replace or re-label a unit to make a conversion pass.
+- Do not convert between units by a factor you chose; use Astropy units.
+
 ## Typical workflow (folder of files → flux domain)
 
 Prefer attaching a flux column on the lightcurve (keeps units and PhotCal
@@ -153,6 +178,7 @@ do not invent pairing.
 | `PhotCal` | Conversion façade → nested `ZeroPoint` (Pogson live) |
 | `PhotometryFilter` | `filter_id` (passport) + `name` (human label) |
 | `get_*_colnames` / `get_error_colnames` | UCD column discovery (see above) |
+| `VOLightCurve.get_observation_times` | Absolute times from the declared time origin and scale |
 
 PhotDM shape (simplified): `VOLightCurve.photdms[col]` → hub → `PhotCal` →
 `PogsonZeroPoint` / stubs. Filter passport:
@@ -167,6 +193,9 @@ PhotDM shape (simplified): `VOLightCurve.photdms[col]` → hub → `PhotCal` →
 - Inferring `.dat` string vs float columns from cell content; use header
   role rules in [references/io_contract.md](references/io_contract.md) §4b.
 - Local magnitude↔flux or SNR→σ_m formulae.
+- Adding a mission time offset (BTJD, BJD-2455197.5, ...) to a time column, or
+  adding `timeorigin` by hand instead of `get_observation_times()`.
+- Stripping or replacing a column unit so that a conversion succeeds.
 - Inventing `FILTER` / ZP metadata the file does not carry.
 - Inventing error↔value column pairing when discovery returns multiple matches.
 

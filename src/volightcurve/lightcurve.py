@@ -1709,6 +1709,71 @@ class VOLightCurve:
         self.photdms[colname_out] = photdm
         return colname_out
 
+    def get_observation_times(self, column=None):
+        """Returns the observation times of a time column as an Astropy ``Time``.
+
+        The only supported way to obtain absolute times from a product. The column holds
+        offsets from the declared ``TIMESYS`` time origin, so the origin is added here. The
+        source (TESS, Gaia, ZTF, ...) never decides a shift: only the declared time origin and
+        time scale do, whatever the archive's native convention. A value at or above
+        ``TIME_OFFSET_ABSOLUTE_JD_THRESHOLD`` is taken as a full Julian Date, as on ingest.
+        Origin and values are kept in two parts, so no precision is lost.
+
+        The reference position (``BARYCENTER``, ``HELIOCENTER``, ...) is not part of an
+        Astropy ``Time``; read it from ``self.timesys.refposition`` and report it.
+
+        Args:
+            column (str, optional): Time column name. Defaults to the first column found by
+                ``get_time_colnames``.
+
+        Returns:
+            astropy.time.Time: Times in the declared time scale, ``format="jd"``. A
+                non-finite value stays non-finite.
+
+        Raises:
+            ValueError: When there is no time column, the time origin is not declared for an
+                offset, the time scale is not declared, or it is not an Astropy time scale.
+        """
+        from astropy.time import Time
+
+        from volightcurve.time_reference import (
+            TIME_OFFSET_ABSOLUTE_JD_THRESHOLD,
+            resolve_observation_timesys,
+        )
+
+        time_cols = self.get_time_colnames()
+        if not time_cols:
+            raise ValueError("No observation time column (UCD time.epoch) was found.")
+        name = time_cols[0] if column is None else column
+        if name not in time_cols:
+            raise ValueError(f"{name!r} is not a time column; time columns: {time_cols}.")
+        ref_id = (self.field_timesys_ref or {}).get(name)
+        if ref_id:
+            timesys = self.timesys_by_id.get(ref_id)
+            if timesys is None:
+                raise ValueError(f"Time column {name!r} references unknown TIMESYS {ref_id!r}.")
+        else:
+            timesys = resolve_observation_timesys(self)
+        if timesys.timescale is None:
+            raise ValueError(
+                "The time scale (TIMESYS timescale) is not declared; it is not assumed."
+            )
+        scale = str(timesys.timescale).strip().lower()
+        if scale not in Time.SCALES:
+            raise ValueError(
+                f"The declared time scale {timesys.timescale!r} is not an Astropy time scale "
+                f"({', '.join(Time.SCALES)})."
+            )
+        values = np.asarray(self.table[name], dtype=float)
+        is_offset = np.isfinite(values) & (values < TIME_OFFSET_ABSOLUTE_JD_THRESHOLD)
+        if is_offset.any() and timesys.timeorigin is None:
+            raise ValueError(
+                "The time origin (TIMESYS timeorigin) is not declared, so time offsets "
+                "cannot be converted to absolute Julian Date; it is not assumed."
+            )
+        origin = np.where(is_offset, float(timesys.timeorigin or 0.0), 0.0)
+        return Time(origin, values, format="jd", scale=scale)
+
     def get_time_colnames(self):
         """Retrieves list of table column names containing time data.
 
