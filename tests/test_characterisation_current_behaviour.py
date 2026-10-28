@@ -420,7 +420,7 @@ def test_limit_writer_emits_one_photcal_group_for_all_photometry_columns():
 
 def test_units_dimensionless_is_written_as_one():
     """REWRITTEN (units, step 3): a dimensionless zero point flux is written as ``unit="1"``."""
-    from volightcurve import VO_DIMENSIONLESS_WIRE
+    from volightcurve.vo_unit_codec import VO_DIMENSIONLESS_WIRE
 
     photdm = PhotDM(photcal=PhotCal(zp_flux=1.0, zp_mag=0.0))
     text = _write_bytes(_mag_table(), photdms={"phot": photdm}).decode()
@@ -441,7 +441,7 @@ def test_units_absent_zero_point_has_no_unit_attribute_and_no_param():
 
 def test_units_codec_reads_every_dimensionless_form_as_none():
     """REWRITTEN (units, step 3): ``1``, ``""``, ``---`` and a dimensionless Unit are ``None``."""
-    from volightcurve import to_internal, to_wire
+    from volightcurve.vo_unit_codec import to_internal, to_wire
 
     assert to_internal(u.dimensionless_unscaled) is None
     for form in ("", "1", " 1 ", "---", None):
@@ -466,7 +466,7 @@ def test_units_old_empty_unit_attribute_is_read_as_dimensionless():
     )
     photcal = VOLightCurve(io.BytesIO(payload)).photdms["mag"].photcal
     assert photcal.zp_flux.value == pytest.approx(1.0)
-    assert photcal._zp_flux_unit_text is None
+    assert photcal.zero_point._zp_flux_unit_text is None
 
 
 def test_units_round_trip_of_dimensionless_and_electron_per_second():
@@ -475,7 +475,7 @@ def test_units_round_trip_of_dimensionless_and_electron_per_second():
         photdm = PhotDM(photcal=PhotCal(zp_flux=1.0, zp_flux_unit=unit))
         payload = _write_bytes(_mag_table(), photdms={"phot": photdm})
         back = VOLightCurve(io.BytesIO(payload)).photdms["phot"].photcal
-        assert back._zp_flux_unit_text == expected
+        assert back.zero_point._zp_flux_unit_text == expected
 
 
 def test_units_inspect_unit_string_reports_vounit_problems():
@@ -505,7 +505,7 @@ def test_units_check_units_of_a_curve_lists_only_findings():
     findings = volc.check_units()
     assert list(findings) == ["photcal:phot:zeroPointFlux"]
     assert findings["photcal:phot:zeroPointFlux"].ok
-    volc.photdms["phot"].photcal._zp_flux_unit_text = "electron s-1"
+    volc.photdms["phot"].photcal.zero_point._zp_flux_unit_text = "electron s-1"
     assert not volc.check_units()["photcal:phot:zeroPointFlux"].ok
 
 
@@ -921,7 +921,7 @@ def test_described_interpretation_is_one_sentence_per_kind_in_the_description():
     assert "(from comments or metadata keywords)" in description
     assert "time origin 2450000.0" in description
     assert "period 0.5" in description
-    assert "filter Generic/Bessell.V" in description
+    assert "filter identifier Generic/Bessell.V" in description
     assert "promoted_by_name" not in volc.table.meta
 
 
@@ -944,7 +944,7 @@ def test_described_sentence_has_no_keyword_pattern_and_is_not_added_twice():
     add_interpretation_note(
         volc.table,
         "from comments or metadata keywords",
-        ["time origin 2450000.0", "period 0.5", "filter Generic/Bessell.V"],
+        ["time origin 2450000.0", "period 0.5", "filter identifier Generic/Bessell.V"],
     )
     assert volc.table.meta["description"] == description
 

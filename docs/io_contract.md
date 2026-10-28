@@ -7,6 +7,14 @@ Pogson/asinh formulae. See package README and
 ``src/volightcurve/photdm.py``.
 
 
+**Declared versus guessed:** the core reads and writes only what a file declares.
+For loose files (``.dat``, CSV, ECSV, VOTables with little metadata) the interpretation
+step (``volightcurve.interpretation``) adds guesses: column roles from names or
+positions, time origin, period, epoch and filter from comments, a label column. Each
+guess is recorded in the table description ("Interpreted from the file, not declared in
+it ..."). ``strict=True`` skips it. The rules below that name a guess (name to role,
+keyword comments, header selection) describe interpretation, not the core.
+
 Canonical rules for ``read_lightcurve`` / ``write_lightcurve``. Do not invent
 alternate formats or nested application schemas.
 
@@ -178,8 +186,9 @@ When several columns share one role, see §8 (``mag-1``, ``mag-2``, …).
 1. The time column is relative to an explicit origin (``JD0`` / TIMESYS
    ``@timeorigin``).
 2. ``EPOCH`` must use that same origin as the time column in the file.
-3. Missing ``JD0`` on legacy ``.dat`` ingest defaults to ``0`` (documented
-   heuristic). Writers must not invent a non-zero origin.
+3. A missing ``JD0`` on a ``.dat`` stays missing; ``time_problems()`` reports it.
+   The suggested origin ``0`` lives in ``volightcurve.suggestions`` and is applied
+   by nobody. Writers must not invent an origin.
 
 VOTable writing may change **time values** to MJD and record the origin on
 TIMESYS (the same sense as ``JD0``). Field **names** and **UCDs** stay as on

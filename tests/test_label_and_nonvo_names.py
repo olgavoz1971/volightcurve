@@ -13,6 +13,9 @@ from volightcurve import (
 )
 
 
+from volightcurve.interpretation import guess_label_colnames  # noqa: E402
+
+
 def _ucd(table: Table, name: str, ucd: str) -> None:
     """Sets a column UCD in place.
 
@@ -38,7 +41,7 @@ def test_label_prefers_leftmost_meta_id_ucd():
 
 
 def test_label_falls_back_to_leftmost_non_science_column():
-    """Without a label UCD, the leftmost non-science column is the label."""
+    """Without a label UCD nothing is declared; the guess is the leftmost non-science column."""
     table = Table()
     table["jd"] = np.array([2459000.0, 2459001.0])
     table["mag"] = np.array([12.0, 12.1])
@@ -46,7 +49,8 @@ def test_label_falls_back_to_leftmost_non_science_column():
     table["note"] = ["x", "y"]
     _ucd(table, "jd", "time.epoch")
     _ucd(table, "mag", "phot.mag")
-    assert get_label_colnames(table) == ["plate"]
+    assert get_label_colnames(table) == []
+    assert guess_label_colnames(table) == ["plate"]
 
 
 def test_per_row_date_is_not_the_label():
@@ -59,7 +63,7 @@ def test_per_row_date_is_not_the_label():
     table["Camera"] = ["ba" if i < 20 else "bb" for i in range(n)]
     _ucd(table, "jd", "time.epoch")
     _ucd(table, "mag", "phot.mag")
-    assert get_label_colnames(table) == ["Camera"]
+    assert guess_label_colnames(table) == ["Camera"]
 
 
 def test_dat_ingest_assigns_meta_id_without_renaming():

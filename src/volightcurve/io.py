@@ -22,7 +22,8 @@ from volightcurve.io_meta import (
     free_text_comments,
     narrative_file_comments,
 )
-from volightcurve.lightcurve import VOLightCurve, write_vo_lightcurve
+from volightcurve.lightcurve import VOLightCurve
+from volightcurve.votable_writer import write_vo_lightcurve
 from volightcurve.time_reference import JD_TO_MJD
 
 import numpy as np
@@ -223,7 +224,7 @@ def table_with_non_vo_column_names(table: Table) -> Table:
     Returns:
         astropy.table.Table: Copy ready for CSV, ``.dat``, or ECSV.
     """
-    from volightcurve.lightcurve import column_main_role
+    from volightcurve.columns import column_main_role
 
     grouped: dict[str, list[str]] = {role: [] for role in _NON_VO_ROLE_BASENAME}
     for name in table.colnames:
@@ -458,7 +459,7 @@ def _table_for_votable_codec(volc: VOLightCurve) -> tuple[Table, float]:
         tuple: ``(table, timeorigin)`` for ``write_vo_lightcurve``; ``timeorigin`` is
             ``None`` when the product declares none and no shift was needed.
     """
-    from volightcurve.lightcurve import get_time_colnames
+    from volightcurve.columns import get_time_colnames
     from volightcurve.time_reference import TIME_OFFSET_ABSOLUTE_JD_THRESHOLD
 
     out = volc.table.copy()

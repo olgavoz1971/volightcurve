@@ -391,14 +391,14 @@ def calibration_dict_from_volc(volc) -> dict[str, Any]:
             calibration[KEY_ZP_FLUX] = float(photcal.zp_flux.value)
         except Exception:
             calibration[KEY_ZP_FLUX] = float(photcal.zp_flux)
-        unit_text = getattr(photcal, "_zp_flux_unit_text", None)
+        unit_text = getattr(photcal.zero_point, "_zp_flux_unit_text", None)
         calibration[KEY_ZP_FLUX_UNIT] = to_internal(unit_text)
     if getattr(photcal, "zp_mag", None) is not None:
         try:
             calibration[KEY_ZP_MAG] = float(photcal.zp_mag.value)
         except Exception:
             calibration[KEY_ZP_MAG] = float(photcal.zp_mag)
-        mag_unit = getattr(photcal, "_zp_mag_unit_text", None)
+        mag_unit = getattr(photcal.zero_point, "_zp_mag_unit_text", None)
         calibration[KEY_ZP_MAG_UNIT] = str(mag_unit) if mag_unit else "mag"
     mag_sys = getattr(photcal, "mag_sys", None)
     if mag_sys:

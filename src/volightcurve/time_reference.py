@@ -13,7 +13,8 @@ JD_TO_MJD = 2400000.5
 TIME_OFFSET_ABSOLUTE_JD_THRESHOLD = JD_TO_MJD
 
 if TYPE_CHECKING:
-    from volightcurve.lightcurve import TimeSys, VOLightCurve
+    from volightcurve.lightcurve import VOLightCurve
+    from volightcurve.model import TimeSys
 
 
 @dataclass(frozen=True)
@@ -46,7 +47,7 @@ def _timesys_from_gavo_attrs(attrs: dict) -> "TimeSys":
     Raises:
         ValueError: When ``timeorigin`` is declared but is not a number.
     """
-    from volightcurve.lightcurve import TimeSys
+    from volightcurve.model import TimeSys
 
     raw_origin = attrs.get("timeorigin")
     timeorigin = None if raw_origin in (None, "") else float(raw_origin)
@@ -153,7 +154,7 @@ def extract_timesys_metadata_from_gavo(tree) -> TimesysMetadata:
     Returns:
         TimesysMetadata: Registry, field/param refs, and the first TIMESYS block.
     """
-    from volightcurve.lightcurve import TimeSys
+    from volightcurve.model import TimeSys
 
     registry = extract_timesys_registry_from_gavo(tree)
     field_refs = extract_field_timesys_refs_from_gavo(tree)
@@ -186,7 +187,7 @@ def resolve_observation_timesys(volc: VOLightCurve) -> "TimeSys":
     Raises:
         ValueError: When time columns disagree on ``timeorigin`` or none are found.
     """
-    from volightcurve.lightcurve import TimeSys, get_time_colnames
+    from volightcurve.columns import get_time_colnames
 
     time_cols = get_time_colnames(volc.table)
     if not time_cols:

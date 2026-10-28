@@ -76,8 +76,8 @@ def test_write_vo_dimensionless_zp_uses_empty_unit_attribute():
     lc = VOLightCurve(buf)
     photdm = next(iter(lc.photdms.values()), None)
     assert photdm is not None and photdm.photcal is not None
-    assert photdm.photcal._zp_flux_unit_text is None
-    assert not photdm.photcal._zp_flux_unit_unparsed
+    assert photdm.photcal.zero_point._zp_flux_unit_text is None
+    assert not photdm.photcal.zero_point._zp_flux_unit_unparsed
 
 
 def test_double_star_power_is_valid_and_single_star_is_not():

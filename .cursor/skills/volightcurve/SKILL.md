@@ -84,9 +84,9 @@ This skill folder is self-contained: extra detail lives under
   Never embed `10**(-0.4*…)` / `(2.5/ln10)*…` in application scripts.
   `PhotCal()` does not fill zero points. Those four methods raise
   `PhotCalError` with specific reasons. `inspect_conversion_photcal` returns
-  the same list and does not write defaults. Magnitude system defaults to
-  Vega. `photcal_defaults` is for a host that fills gaps and warns; do not
-  apply it inside conversion.
+  the same list and does not write defaults. A missing magnitude system stays
+  missing. Suggested stand-in values live in `volightcurve.suggestions`; they
+  are for a host that shows them to the user, never for conversion or writing.
 - A declared `MAG0` / `ZP_MAG` without `ZP_FLUX` stores the magnitude zero
   point only. Do not invent flux zero point `1`.
 - Prefer **VOTable** when rich PhotDM / TIMESYS matter. Non-VOTable formats are
@@ -97,21 +97,69 @@ This skill folder is self-contained: extra detail lives under
   `flux_error` mean a fixed domain — see
   [references/column_discovery.md](references/column_discovery.md).
 
+## Declared versus guessed (read before trusting a value)
+
+The package has two parts. Know which one produced a value.
+
+| Part | What it does | Where |
+|------|--------------|-------|
+| **Core** | Stores and uses only what the file or the caller declares: VOTable FIELD/PARAM/GROUP/TIMESYS content, explicit arguments. A gap stays a gap; conversion raises with the reason. | `VOLightCurve` (strict), `model`, `votable_reader`, `columns`, `votable_writer` |
+| **Interpretation** | Guesses for files that declare too little (``.dat``, CSV, ECSV, loose VOTables): column roles from names or positions, a time origin, period, epoch or filter from comments, a label column. | `volightcurve.interpretation` (runs through one call, `interpret`) |
+
+- `read_lightcurve(path, strict=True)` (or `VOLightCurve(file, strict=True)`) skips
+  interpretation. Strict reads VOTable only and refuses other formats. Use it when a wrong
+  guess is worse than a missing value.
+- Everything interpretation sets is recorded as a sentence in the table description:
+  "Interpreted from the file, not declared in it (from comments or metadata keywords): ...".
+  Read them with `volightcurve.interpretation.interpretation_sentences(volc.table.meta.get("description"))`
+  and show them to the user. Do not present a guessed value as a declared one.
+- A bare `FILTER` label becomes the filter `name`; only a value with `/` (a Filter Profile
+  Service code) becomes `filter_id`.
+- `volightcurve.suggestions` is plain data: values worth offering for data that declare
+  nothing (Vega, reference magnitude 0, relative flux 1, UTC heliocentric time with origin
+  0), each with a reason. Nothing applies them. Offer them to the user and apply only after
+  an explicit choice.
+- Never reach into `volightcurve.interpretation` to build a product. It is the only
+  place that guesses, and its names may change.
+
 ## Time and units (read before touching either)
 
 **Time.** The time column holds offsets from the declared `TIMESYS` time origin.
 Get absolute times only with `volc.get_observation_times()` (an `astropy.time.Time`
-in the declared time scale). Read the reference position from
-`volc.timesys.refposition`.
+in the declared time scale), or, when you need plain float arrays,
+`volc.get_observation_jd()` and `volc.get_observation_mjd()`. The folding epoch
+(`table.meta["epoch"]`) is an offset from the same origin: use `volc.get_epoch_jd()` /
+`get_epoch_mjd()`, never add the origin yourself. Read the reference
+position from `volc.timesys.refposition`.
 
 - The source never decides a time shift. Seeing "TESS", "Gaia" or "ZTF" is not a
   reason to add or subtract BTJD, BJD-2455197.5 or any other mission offset: the
   products are source agnostic and the origin is declared in the file. A TESS
   light curve from Discovery is in MJD (`timeorigin` 2400000.5), not BTJD.
+- The float methods (`get_*_jd`, `get_*_mjd`) need only the declared origin; the `Time`
+  methods also need the declared time scale. A missing scale is listed by `time_problems()`.
 - Never write `jd + 2457000`-style arithmetic. If `time_problems()` is not empty,
   or `get_observation_times()` raises (no time scale, no origin), stop and report
   it to the user; do not guess an origin or a scale.
 - Tell the user which time scale, reference position and origin you used.
+
+**JD and MJD.** A pure JD to MJD change (no change of time scale or position) is the
+defined offset `MJD = JD - JD_TO_MJD` (2400000.5). Use the constant, not a typed number:
+
+```python
+from volightcurve import JD_TO_MJD
+
+mjd = jd - JD_TO_MJD    # JD -> MJD
+jd = mjd + JD_TO_MJD    # MJD -> JD
+```
+
+- Do not build an `astropy.time.Time` just to add or subtract this constant. Use
+  Astropy `Time` when the time scale or the position changes (UTC to TDB, barycentric
+  or heliocentric corrections) or for calendar strings.
+- This is a change of the number's origin only. It does not say which time scale
+  the number is in; take that from `timesys.timescale`.
+- If the product's time system is declared, `volc.get_observation_mjd()` gives MJD
+  without a hand-written offset.
 
 **Units.** Keep the unit the file declares.
 
@@ -167,6 +215,23 @@ These return **lists** filtered by UCD domain. There is no standard IVOA 1:1
 error↔value FIELD link yet; if several error columns match, fail or ask —
 do not invent pairing.
 
+## Which call for which situation
+
+| Situation | Call |
+|-----------|------|
+| A file | `read_lightcurve(path, filename=path.name)` |
+| Which column is time / mag / flux / error | `volc.get_time_colnames()`, `get_mag_colnames()`, `get_flux_colnames()`, `get_mag_error_colnames()`, `get_flux_error_colnames()` |
+| Absolute times | `volc.get_observation_times()` (`Time`), `get_observation_jd()`, `get_observation_mjd()` (float arrays) |
+| The folding epoch as JD / MJD | `volc.get_epoch_jd()`, `volc.get_epoch_mjd()` (floats, `None` if not declared), `volc.get_epoch_time()` (`Time`); the period is a duration, read `volc.table.meta["period"]` |
+| Is the time description complete | `volc.time_problems()` |
+| Flux from magnitudes, or the reverse | `volc.add_flux_column_from_mag(col)` / `add_mag_column_from_flux(col)`; `PhotCal.mag_to_flux` / `flux_to_mag` for a bare array |
+| Can it be converted, are the units fine | `volc.conversion_problems(col)`, `volc.check_units()` |
+| A table plus an explicit calibration | `assemble_volightcurve(table, timeorigin=..., zp_flux=..., ...)` (explicit calibration arguments) |
+| Save the product | `write_lightcurve(volc, format, destination=...)` |
+| A VOTable straight from an Astropy table | `write_vo_lightcurve(...)` (low level) |
+
+Everything else the package exports is for advanced use; you do not need it for these.
+
 ## Public API (use these)
 
 | Symbol | Role |
@@ -176,9 +241,10 @@ do not invent pairing.
 | `assemble_volightcurve` | Table + explicit calibration → `VOLightCurve` |
 | `VOLightCurve` | In-memory table + `photdms` + TIMESYS |
 | `PhotCal` | Conversion façade → nested `ZeroPoint` (Pogson live) |
-| `PhotometryFilter` | `filter_id` (passport) + `name` (human label) |
+| `PhotometryFilter` | `filter_id` (PhotDM `identifier`: Filter Profile Service code such as `TESS/TESS.Red`, unique) + `name` (short human label such as `Red`, for file names, titles, plots) |
 | `get_*_colnames` / `get_error_colnames` | UCD column discovery (see above) |
-| `VOLightCurve.get_observation_times` | Absolute times from the declared time origin and scale |
+| `VOLightCurve.get_observation_times` | Absolute times (`Time`) from the declared time origin and scale |
+| `VOLightCurve.get_observation_jd` / `get_observation_mjd` | The same as float arrays (JD or MJD) |
 
 PhotDM shape (simplified): `VOLightCurve.photdms[col]` → hub → `PhotCal` →
 `PogsonZeroPoint` / stubs. Filter passport:
@@ -193,10 +259,12 @@ PhotDM shape (simplified): `VOLightCurve.photdms[col]` → hub → `PhotCal` →
 - Inferring `.dat` string vs float columns from cell content; use header
   role rules in [references/io_contract.md](references/io_contract.md) §4b.
 - Local magnitude↔flux or SNR→σ_m formulae.
+- Building `astropy.time.Time` only to convert JD to MJD or back; use `JD_TO_MJD`.
 - Adding a mission time offset (BTJD, BJD-2455197.5, ...) to a time column, or
   adding `timeorigin` by hand instead of `get_observation_times()`.
 - Stripping or replacing a column unit so that a conversion succeeds.
-- Inventing `FILTER` / ZP metadata the file does not carry.
+- Inventing `FILTER` / ZP metadata the file does not carry, or presenting an interpreted value as declared.
+- Putting a display label (`V`, `Red`) into `filter_id`, or a service code into `name`. Store what the source declares in the right field; only `interpretation` guesses (a loose value with `/` is an identifier, a bare label is a name).
 - Inventing error↔value column pairing when discovery returns multiple matches.
 
 ## When stuck

@@ -17,12 +17,15 @@ from typing import TYPE_CHECKING
 
 import astropy.units as u
 
-from volightcurve.lightcurve import (
-    PhotCal,
-    PhotDM,
-    PhotometryFilter,
-    assign_label_column_ucd,
+from volightcurve.columns import (
+    DEFAULT_LABEL_UCD,
+    LABEL_UCD_FRAGMENTS,
+    _column_ucd,
+    _is_per_row_stamp,
+    column_main_role,
+    get_label_colnames,
 )
+from volightcurve.model import PhotCal, PhotDM, PhotometryFilter
 
 if TYPE_CHECKING:
     from astropy.table import Table
@@ -345,6 +348,109 @@ def _recover_lc_colnames(table):
     return table
 
 
+def guess_label_colnames(table: "Table") -> list[str]:
+    """Guesses the per-epoch label column when the table declares none.
+
+    Returns the declared label column when there is one. Otherwise returns the leftmost
+    column that is not time, magnitude, flux or an error, skipping columns that are
+    unique on almost every row (observation dates). This is a guess from column
+    position. See ``docs/io_contract.md`` §8.
+
+    Args:
+        table (astropy.table.Table): Product or file table.
+
+    Returns:
+        list of str: Zero or one column name.
+    """
+    declared = get_label_colnames(table)
+    if declared:
+        return declared
+    for name in table.colnames:
+        if column_main_role(table, name) is None and not _is_per_row_stamp(table, name):
+            return [name]
+    return []
+
+
+def assign_label_column_ucd(table: "Table") -> str | None:
+    """Marks the guessed label column with the label UCD when it has none.
+
+    Does not rename the column. If the column already has a UCD containing
+    ``meta.code`` or ``meta.id``, it is left unchanged. Otherwise the UCD is
+    set to ``meta.id``. See ``docs/io_contract.md`` §8.
+
+    Args:
+        table (astropy.table.Table): Product table after role promotion.
+
+    Returns:
+        str or None: Name of the column that received the UCD, ``None`` when nothing
+            was assigned.
+    """
+    names = guess_label_colnames(table)
+    if not names:
+        return None
+    name = names[0]
+    ucd = _column_ucd(table, name)
+    if any(fragment in ucd for fragment in LABEL_UCD_FRAGMENTS):
+        return None
+    column = table[name]
+    if column.info.meta is None:
+        column.info.meta = {}
+    column.info.meta["ucd"] = DEFAULT_LABEL_UCD
+    return name
+
+
+def _interpret_votable(volc: "VOLightCurve") -> None:
+    """Interpretation step for a VOTable: what the file did not declare.
+
+    Promotes column UCDs, marks a label column, and picks a time origin from comments
+    or metadata keywords when the file declares none. Each guess is recorded as a
+    sentence in the table DESCRIPTION.
+
+    Args:
+        volc (VOLightCurve): Instance whose declared metadata has been read.
+    """
+    volc.table = _promote_to_vo_standards(volc.table)
+    label = assign_label_column_ucd(volc.table)
+    if label:
+        add_interpretation_note(
+            volc.table,
+            "from the column values",
+            [f"column {label} was marked as the label column"],
+        )
+    if volc.timesys.timeorigin is None:
+        volc.timesys.timeorigin = _pickup_jd0_from_table(volc.table)
+        if volc.timesys.timeorigin is not None:
+            add_interpretation_note(
+                volc.table,
+                "from comments or metadata keywords",
+                [f"time origin {volc.timesys.timeorigin}"],
+            )
+
+
+def interpret(volc: "VOLightCurve", *, source: str) -> None:
+    """Single entry point of all guessing. The core calls only this function.
+
+    Does nothing for a strict instance. Otherwise runs the VOTable step or the
+    non-VOTable step.
+
+    Args:
+        volc (VOLightCurve): Instance with ``table`` assigned.
+        source (str): ``"votable"`` for a table read from a VOTable, ``"table"`` for any
+            other tabular input (ECSV, ASCII, an Astropy table).
+
+    Raises:
+        ValueError: When ``source`` is neither ``"votable"`` nor ``"table"``.
+    """
+    if source not in ("votable", "table"):
+        raise ValueError(f"Unknown interpretation source {source!r}; use 'votable' or 'table'.")
+    if volc.strict:
+        return
+    if source == "votable":
+        _interpret_votable(volc)
+    else:
+        apply_non_votable_heuristics(volc)
+
+
 def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
     """Apply column promotion and comment/flat-meta calibration for non-VOTable tables.
 
@@ -417,10 +523,19 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
     if volc.table.meta.get("epoch") is not None:
         read_items.append(f"epoch {volc.table.meta['epoch']}")
 
-    heur_filter_id = calibration.get(KEY_FILTER) or _pickup_filter_from_table(volc.table)
-    if heur_filter_id:
-        volc.table.meta["filter"] = heur_filter_id
-        read_items.append(f"filter {heur_filter_id}")
+    heur_filter_text = calibration.get(KEY_FILTER) or _pickup_filter_from_table(volc.table)
+    heur_filter_id = None
+    heur_filter_label = None
+    if heur_filter_text:
+        volc.table.meta["filter"] = heur_filter_text
+        if "/" in str(heur_filter_text):
+            # Looks like a Filter Profile Service code (Facility/Subcategory.Band).
+            heur_filter_id = heur_filter_text
+            read_items.append(f"filter identifier {heur_filter_text}")
+        else:
+            # A bare band label (V, g, Red) is a name, not a unique service code.
+            heur_filter_label = str(heur_filter_text)
+            read_items.append(f"filter name {heur_filter_text}")
     if KEY_FILTER_NAME in calibration:
         volc.table.meta["filter_name"] = str(calibration[KEY_FILTER_NAME])
         read_items.append(f"filter name {calibration[KEY_FILTER_NAME]}")
@@ -454,7 +569,7 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
 
     for colname in volc.get_flux_colnames() + volc.get_mag_colnames():
         photdm = volc.photdms.get(colname, None)
-        heur_filter_name = None
+        heur_filter_name = heur_filter_label
         if KEY_FILTER_NAME in calibration:
             heur_filter_name = str(calibration[KEY_FILTER_NAME])
         new_filter = PhotometryFilter(
@@ -483,6 +598,8 @@ def apply_non_votable_heuristics(volc: "VOLightCurve") -> None:
                 photdm.filter_name = heur_filter_name
             if build_photcal:
                 if photdm.photcal is None:
+                    if photdm.filter is not None:
+                        photcal.photometry_filter = photdm.filter
                     photdm.photcal = photcal
                 else:
                     if has_zp_mag:

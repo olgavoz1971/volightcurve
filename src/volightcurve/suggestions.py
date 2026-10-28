@@ -2,7 +2,7 @@
 
 The library never writes these values on its own. A host UI or an agent shows them, with
 the reason, and the user applies, edits or ignores them through an explicit action. They
-replace the old ``photcal_defaults`` constants (kept for one release, deprecated).
+replace the old ``photcal_defaults`` constants (module removed).
 
 The values (agreed in Ticket 32): for observers' files with calibrated magnitudes,
 Vega magnitudes and a relative flux without a physical unit (a magnitude-0 star has flux

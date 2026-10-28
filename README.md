@@ -27,7 +27,7 @@ venv with ``pip install -e``.
   (nested PhotDM: ``PhotCal`` → ``ZeroPoint``; Pogson today, Asinh/Linear stubs).
 - Ingest may succeed with an incomplete calibration. Conversion raises
   ``PhotCalError`` and does **not** invent zero points. ``PhotCal()`` with no
-  arguments stores missing zero points and the magnitude system Vega.
+  arguments stores missing zero points and a missing magnitude system.
 
 ## The in-memory product (`VOLightCurve`)
 
@@ -121,8 +121,8 @@ on an assembled lightcurve).
 ``inspect_conversion_photcal`` returns the same reasons as a list and does
 not change the calibration. A missing flux-column unit is not treated as
 dimensionless. Suggested stand-in zero points live in
-``volightcurve.photcal_defaults`` for a host that chooses to fill gaps and
-warn; this package does not apply them during conversion or on write.
+``volightcurve.suggestions`` (with the reason for each) for a host that chooses to
+offer them to the user; this package does not apply them during conversion or on write.
 A file keyword ``MAG0`` or ``ZP_MAG`` without ``ZP_FLUX`` stores the
 magnitude zero point only.
 
@@ -181,6 +181,42 @@ See ``examples/basic_workflow.py``:
 python examples/basic_workflow.py
 ```
 
+## Declared versus guessed
+
+The package has two parts, and it keeps them apart.
+
+| Part | What it does | Modules |
+|------|--------------|---------|
+| Core | Stores and uses only what a file or caller declares. A gap stays a gap and conversion raises with the reason. | ``lightcurve`` (``VOLightCurve``), ``model``, ``votable_reader``, ``columns``, ``votable_writer`` |
+| Interpretation | Guesses for files that declare too little: column roles from names or positions, time origin, period, epoch and filter from comments, a label column. One entry point, ``interpretation.interpret``. | ``interpretation`` |
+
+- ``read_lightcurve(path, strict=True)`` (or ``VOLightCurve(file, strict=True)``) skips
+  interpretation entirely; strict mode reads VOTable only.
+- Every guess is recorded as a sentence in the table description ("Interpreted from the
+  file, not declared in it (from ...): ..."). ``interpretation.interpretation_sentences``
+  extracts them so a UI can show them.
+- ``suggestions`` is plain data (suggested time system and calibration with a reason for
+  each). Nothing applies it; a host or agent offers it and the user decides.
+
+## Start here: which call for which situation
+
+| Your situation | Call |
+|----------------|------|
+| I have a file (VOTable, ECSV, CSV, ``.dat``) | ``volc = read_lightcurve(path, filename=path.name)`` |
+| Which columns are time, magnitude, flux, errors? | ``volc.get_time_colnames()``, ``get_mag_colnames()``, ``get_flux_colnames()``, ``get_mag_error_colnames()``, ``get_flux_error_colnames()`` (UCD based, never by name) |
+| I need absolute times (JD, MJD) | ``volc.get_observation_times()`` (Astropy ``Time``), ``volc.get_observation_jd()`` or ``volc.get_observation_mjd()`` (float arrays). They add the declared ``timeorigin``; the source (TESS, Gaia, ...) never decides a shift |
+| I need the folding epoch as a JD or MJD | ``volc.get_epoch_jd()``, ``volc.get_epoch_mjd()`` (floats, ``None`` when no epoch is declared) or ``volc.get_epoch_time()`` (Astropy ``Time``). Same rule: the declared ``timeorigin`` is added. The period is a duration and needs no origin: read ``volc.table.meta["period"]`` |
+| Is the time description complete? | ``volc.time_problems()`` (lists what is missing; never raises) |
+| I need flux from magnitudes, or magnitudes from flux | ``volc.add_flux_column_from_mag(col)`` / ``volc.add_mag_column_from_flux(col)``, or ``PhotCal.mag_to_flux`` / ``flux_to_mag`` for a bare array |
+| Can this column be converted? Are the units fine? | ``volc.conversion_problems(col)``, ``volc.check_units()``; a failed conversion raises ``PhotCalError`` or ``UnitsError`` with the reason |
+| I have a table and an explicit calibration | ``assemble_volightcurve(table, timeorigin=..., zp_flux=..., ...)`` (explicit calibration arguments); to attach several calibrations, build ``PhotDM`` objects (``PhotCal``, ``PhotometryFilter``) and use ``write_vo_lightcurve(..., photdms=...)`` |
+| I want to save the product | ``write_lightcurve(volc, "votable_binary", destination=path)`` (the format is chosen only there) |
+| I want a VOTable straight from an Astropy table | ``write_vo_lightcurve(output, table, table_name, photdms=..., ...)`` (low level; ``write_lightcurve`` is the usual way) |
+
+The in-memory product is a ``VOLightCurve``: ``table`` + ``timesys`` + ``photdms``.
+Everything else exported by the package is for advanced use (zero-point classes,
+unit codec, keyword constants, suggestions); you do not need it for the situations above.
+
 ## Public entry points
 
 | Symbol | Role |
@@ -198,7 +234,7 @@ python examples/basic_workflow.py
 | ``find_columns_by_ucd`` | Low-level UCD fragment search on a table |
 | ``get_time_colnames`` / ``get_mag_colnames`` / ``get_flux_colnames`` | Primary columns (errors excluded) |
 | ``get_error_colnames`` | ``stat.error`` columns; optional ``base_ucd`` filter |
-| ``get_label_colnames`` | Designated per-epoch label (``meta.code`` / ``meta.id``, else leftmost non-science column). Skips a column that is unique on almost every row |
+| ``get_label_colnames`` | Declared per-epoch label (``meta.code`` / ``meta.id``); empty when none is declared. Skips a column that is unique on almost every row. The positional guess is ``interpretation.guess_label_colnames`` |
 
 ``VOLightCurve`` also exposes ``get_time_colnames``, ``get_mag_colnames``,
 ``get_flux_colnames``, ``get_mag_error_colnames``, and
@@ -250,6 +286,9 @@ user is not on VOTable. It is **not** a proposed IVOA (or any other)
 standard, and should not be cited as one. Prefer VOTable when you need the
 full annotation model; treat ASCII/ECSV as a best-effort carrier for the
 same ideas.
+
+Everything these formats add on top of what the file declares is interpretation (see
+[Declared versus guessed](#declared-versus-guessed)).
 
 Keyword and codec details: [docs/io_contract.md](docs/io_contract.md)
 (including ``.dat`` §4b: last / role-canonical header selection, name→role
@@ -323,3 +362,7 @@ volightcurve/
     …
   tests/
 ```
+
+### Filter identifier and filter name
+
+`PhotometryFilter.filter_id` is the PhotDM `identifier`: the code that identifies the filter in a Filter Profile Service (`TESS/TESS.Red`, `Palomar/ZTF.r`). `PhotometryFilter.name` is the PhotDM `name`: a short human-readable label (`Red`, `V`) for file names, titles and plots. The core stores each as declared. Only the interpretation of loose files guesses: a value containing `/` becomes the identifier, a bare label becomes the name.

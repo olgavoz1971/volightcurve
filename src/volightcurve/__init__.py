@@ -3,6 +3,26 @@
 This package provides a comprehensive data model and parser for lightcurves, supporting
 standard VOTable files as well as heuristic ASCII text formats. It maps columns to
 astronomical concepts like coordinate systems, time systems, and photometric calibrations.
+
+Start here. Most tasks need only these names:
+
+* ``read_lightcurve(path, filename=...)``: ingest a file into a ``VOLightCurve``.
+* ``write_lightcurve(volc, format, destination=...)``: save it (format chosen only there).
+* ``VOLightCurve``: ``table`` + ``timesys`` + ``photdms``. Its methods do the work:
+  ``get_time_colnames`` / ``get_mag_colnames`` / ``get_flux_colnames`` (find columns by UCD),
+  ``get_observation_times`` / ``get_observation_jd`` / ``get_observation_mjd`` (absolute
+  times: the declared ``timeorigin`` is added; the source of the data never decides a
+  shift; ``get_epoch_time`` / ``get_epoch_jd`` / ``get_epoch_mjd`` do the same for the folding
+  epoch), ``time_problems``, ``check_units``, ``conversion_problems``,
+  ``add_flux_column_from_mag`` / ``add_mag_column_from_flux``.
+* ``PhotCal``, ``PhotDM``, ``PhotometryFilter``: the photometric calibration, and the
+  magnitude and flux conversions (``mag_to_flux``, ``flux_to_mag`` and the error helpers).
+* ``assemble_volightcurve``: build a product from a table and an explicit calibration.
+* ``PhotCalError``, ``LightcurveIOError``: what is raised when something cannot be done.
+
+Everything else exported here (zero-point classes, unit text helpers, suggestions,
+heuristics, low-level writers) is for advanced use. Keyword constants and the unit wire
+helpers live in their submodules (``volightcurve.io_keywords``, ``volightcurve.vo_unit_codec``).
 """
 
 from importlib.metadata import PackageNotFoundError, version
@@ -14,49 +34,16 @@ except PackageNotFoundError:  # pragma: no cover - editable / source tree withou
 
 from .io import (
     assemble_volightcurve,
-    normalise_io_format,
     read_lightcurve,
     write_lightcurve,
 )
 from .io_dat import read_dat_table
 from .io_errors import LightcurveIOError
 from .photcal_check import PhotCalError, inspect_conversion_photcal
-from .io_keywords import (
-    CALIBRATION_KEYWORDS,
-    KEY_BAND,
-    KEY_EPOCH,
-    KEY_FILTER,
-    KEY_FILTER_NAME,
-    KEY_JD0,
-    KEY_MAG0,
-    KEY_MAG_SYS,
-    KEY_PERIOD,
-    KEY_ZP_FLUX,
-    KEY_ZP_FLUX_UNIT,
-    KEY_ZP_MAG,
-    KEY_ZP_MAG_UNIT,
-    WRITE_KEYWORD_ORDER,
-    canonical_keyword,
-    is_calibration_keyword,
-    is_metadata_assignment_line,
-    parse_keyword_assignment,
-)
-from .lightcurve import (
+from .columns import (
     DEFAULT_LABEL_UCD,
-    DEFAULT_TIME_EPOCH_UCD,
-    LABEL_UCD_FRAGMENTS,
-    CooSys,
-    PhotCal,
-    PhotDM,
-    PhotometryFilter,
-    TimeSys,
-    VOLightCurve,
-    assign_label_column_ucd,
     assign_photometry_column_semantics,
     column_main_role,
-    extract_coosys,
-    extract_photdm,
-    extract_timesys,
     find_columns_by_ucd,
     get_error_colnames,
     get_flux_colnames,
@@ -65,10 +52,16 @@ from .lightcurve import (
     get_time_colnames,
     is_flux_column,
     is_mag_column,
-    print_col_ucd,
-    write_vo_lightcurve,
 )
-from .interpretation import apply_non_votable_heuristics, is_magnitude_phot_column
+from .lightcurve import VOLightCurve
+from .model import CooSys, PhotCal, PhotDM, PhotometryFilter, TimeSys
+from .votable_reader import extract_coosys, extract_photdm, extract_timesys
+from .votable_writer import write_vo_lightcurve
+from .interpretation import (
+    apply_non_votable_heuristics,
+    assign_label_column_ucd,
+    is_magnitude_phot_column,
+)
 from .suggestions import (
     SUGGESTION_REASONS,
     suggested_calibration,
@@ -84,12 +77,10 @@ from .photdm import (
 )
 from .time_reference import JD_TO_MJD, TIME_OFFSET_ABSOLUTE_JD_THRESHOLD
 from .vo_unit_codec import (
-    VO_DIMENSIONLESS_WIRE,
     UnitReport,
     inspect_unit_string,
     to_display,
     to_internal,
-    to_wire,
 )
 
 __all__ = [
@@ -107,9 +98,7 @@ __all__ = [
     "extract_coosys",
     "column_main_role",
     "assign_label_column_ucd",
-    "DEFAULT_TIME_EPOCH_UCD",
     "DEFAULT_LABEL_UCD",
-    "LABEL_UCD_FRAGMENTS",
     "ZeroPoint",
     "PogsonZeroPoint",
     "AsinhZeroPoint",
@@ -122,7 +111,6 @@ __all__ = [
     "get_flux_colnames",
     "get_error_colnames",
     "get_label_colnames",
-    "print_col_ucd",
     "is_mag_column",
     "is_flux_column",
     "is_magnitude_phot_column",
@@ -132,11 +120,9 @@ __all__ = [
     "suggested_calibration",
     "suggested_time_system",
     "suggestions_for_missing",
-    "VO_DIMENSIONLESS_WIRE",
     "UnitReport",
     "inspect_unit_string",
     "to_internal",
-    "to_wire",
     "to_display",
     "JD_TO_MJD",
     "TIME_OFFSET_ABSOLUTE_JD_THRESHOLD",
@@ -145,23 +131,4 @@ __all__ = [
     "read_lightcurve",
     "write_lightcurve",
     "assemble_volightcurve",
-    "normalise_io_format",
-    "CALIBRATION_KEYWORDS",
-    "KEY_BAND",
-    "KEY_EPOCH",
-    "KEY_FILTER",
-    "KEY_FILTER_NAME",
-    "KEY_JD0",
-    "KEY_MAG0",
-    "KEY_MAG_SYS",
-    "KEY_PERIOD",
-    "KEY_ZP_FLUX",
-    "KEY_ZP_FLUX_UNIT",
-    "KEY_ZP_MAG",
-    "KEY_ZP_MAG_UNIT",
-    "WRITE_KEYWORD_ORDER",
-    "canonical_keyword",
-    "is_calibration_keyword",
-    "is_metadata_assignment_line",
-    "parse_keyword_assignment",
 ]
